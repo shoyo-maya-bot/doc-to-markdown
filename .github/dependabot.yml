@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # devtools-common（Git タグ依存）を含む Python 依存の更新 PR
+  - package-ecosystem: pip
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      python-deps: {patterns: ["*"]}
+  # 再利用ワークフロー（<your-org>/.github@vX）や actions の更新 PR
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
