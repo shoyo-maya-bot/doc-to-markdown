@@ -4,17 +4,21 @@
 - 図形は上→下、左→右の順で読む（グループは展開）
 - 本文プレースホルダの段落は箇条書き（段落レベルを保持）、その他のテキストボックスは段落
 - 表・画像を抽出。発表者ノートは「ノート:」段落として末尾に付ける
+- SmartArt の文字は `> **SmartArt**: …` として出力（図の形は再現しない）
 """
 
 from __future__ import annotations
 
+import re
+import zipfile
 from pathlib import Path
 
+import defusedxml.ElementTree as SafeET
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
 from ..assets import AssetWriter
-from ..model import Document, Heading, Image, ListItem, Paragraph, Table
+from ..model import Document, Heading, Image, ListItem, Options, Paragraph, Quote, Table, count_chars
 
 _TITLE_TYPES = {PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE}
 _BODY_TYPES = {PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT, PP_PLACEHOLDER.SUBTITLE}
@@ -38,7 +42,37 @@ def _placeholder_type(shape):
         return None
 
 
-def convert(path: Path, assets: AssetWriter) -> Document:
+A_T = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
+DGM_DATA = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData"
+
+
+def raw_text_chars(path: Path) -> int:
+    """zip 内のスライド・ノート・SmartArt の XML から a:t を直接数える（アダプタの解釈を通さない）."""
+    total = 0
+    with zipfile.ZipFile(path) as z:
+        for name in z.namelist():
+            if re.match(r"ppt/(slides/slide|notesSlides/notesSlide|diagrams/data)\d+\.xml$", name):
+                root = SafeET.fromstring(z.read(name))
+                if "notesSlide" in name:  # ノートのスライド番号プレースホルダ等は除く
+                    texts = [t.text or "" for t in root.iter(A_T)]
+                    total += count_chars("".join(texts)) - sum(count_chars(t) for t in texts if t.strip().isdigit())
+                else:
+                    total += count_chars("".join(t.text or "" for t in root.iter(A_T)))
+    return total
+
+
+def _smartart_texts(slide) -> list[str]:
+    out = []
+    for rel in slide.part.rels.values():
+        if rel.reltype == DGM_DATA and not rel.is_external:
+            root = SafeET.fromstring(rel.target_part.blob)
+            texts = [t.text.strip() for t in root.iter(A_T) if t.text and t.text.strip()]
+            if texts:
+                out.append(" / ".join(texts))
+    return out
+
+
+def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Document:
     prs = Presentation(str(path))
     doc = Document()
     st = doc.stats
@@ -79,10 +113,14 @@ def convert(path: Path, assets: AssetWriter) -> Document:
                 st.images += 1
                 rel = assets.write(img.blob, content_type=img.content_type, ext=img.ext)
                 doc.blocks.append(Image(rel, alt=shape.name))
+        for art in _smartart_texts(slide):
+            st.add_text(art)
+            doc.blocks.append(Quote(art, "SmartArt"))
         if slide.has_notes_slide:
             notes = slide.notes_slide.notes_text_frame.text.strip() if slide.notes_slide.notes_text_frame else ""
             if notes:
                 st.add_text(notes)
                 doc.blocks.append(Paragraph("ノート: " + notes))
-    doc.notes.append("SmartArt・グラフは対象外（必要なら --via-pdf を検討）")
+    doc.notes.append("グラフ・図形の形は対象外（SmartArt は文字のみ。必要なら --via-pdf を検討）")
+    doc.raw_text_chars = raw_text_chars(path)
     return doc

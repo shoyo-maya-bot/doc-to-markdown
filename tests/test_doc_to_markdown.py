@@ -126,11 +126,11 @@ class AdapterDetailTest(Tmp):
 
 class NormalizeRenderTest(unittest.TestCase):
     def test_heading_levels_do_not_skip(self):
-        out = normalize([Heading(1, "A"), Heading(4, "B"), Heading(2, " "), Heading(3, "C")])
+        out = list(normalize([Heading(1, "A"), Heading(4, "B"), Heading(2, " "), Heading(3, "C")]))
         self.assertEqual([(h.level, h.text) for h in out], [(1, "A"), (2, "B"), (3, "C")])
 
     def test_table_is_rectangular_and_drops_empty(self):
-        (t,) = normalize([Table([["a", "", "b"], ["1"], ["", "", ""]])])
+        (t,) = list(normalize([Table([["a", "", "b"], ["1"], ["", "", ""]])]))
         self.assertEqual(t.rows, [["a", "b"], ["1", ""]])
 
     def test_render_list_numbering_and_escape(self):
@@ -147,16 +147,25 @@ class NormalizeRenderTest(unittest.TestCase):
         self.assertIn("| a\\|b | c |", md)
 
     def test_list_level_capped(self):
-        out = normalize([ListItem("a", 0), ListItem("b", 3)])
+        out = list(normalize([ListItem("a", 0), ListItem("b", 3)]))
         self.assertEqual(out[1].level, 1)
 
 
 class LossAuditTest(unittest.TestCase):
     def test_detects_missing_table_and_text(self):
         src = SourceStats(tables=2, table_rows=4, text_chars=100)
-        md = "| a | b |\n| --- | --- |\n| 1 | 2 |\n"
-        rules = {f.rule_id for f in lossaudit.audit(src, md, location="x")}
+        out = lossaudit.OutputStats()
+        out.add("| a | b |\n| --- | --- |\n| 1 | 2 |", synthetic=False)
+        rules = {f.rule_id for f in lossaudit.audit(src, out, location="x")}
         self.assertEqual(rules, {"loss.tables", "loss.table_rows", "loss.text"})
+
+    def test_raw_text_check_catches_what_adapter_missed(self):
+        out = lossaudit.OutputStats()
+        out.add("本文だけ", synthetic=False)
+        found = lossaudit.audit(SourceStats(text_chars=4), out, location="x", raw_text_chars=40)
+        self.assertEqual([f.rule_id for f in found], ["loss.raw_text"])
+        # 出力が多い（縦結合の繰り返し等）のは問題にしない
+        self.assertEqual(lossaudit.audit(SourceStats(text_chars=1), out, location="x", raw_text_chars=2), [])
 
     def test_markup_not_counted_as_text(self):
         st = lossaudit.markdown_stats("## 見出し\n\n- **太字**\n\n![a](b.png)\n\n<!-- page 1 -->\n")
@@ -168,6 +177,11 @@ class CliTest(Tmp):
         rc, out, _ = run_cli(str(SAMPLES / "expense-list.xlsx"), "-d", str(self.tmp), "-f", "json")
         self.assertEqual(rc, 0)
         data = json.loads(out)
+        import jsonschema
+        from devtools_common.report import report_schema
+
+        jsonschema.validate(data, report_schema())  # 出力形式の仕様（schema_version 1.x）に適合
+        self.assertEqual(data["tool"], "doc2md")
         self.assertEqual(data["meta"]["converted"], 1)
         self.assertTrue((self.tmp / "expense-list.md").is_file())
 

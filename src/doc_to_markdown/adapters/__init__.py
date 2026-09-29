@@ -1,6 +1,6 @@
 """形式ごとの変換アダプタ.
 
-各アダプタは `convert(path: Path, assets: AssetWriter) -> Document` を実装する。
+各アダプタは `convert(path: Path, assets: AssetWriter, opts: Options) -> Document` を実装する。
 新しい形式を足すときはモジュールを追加し、ADAPTERS に拡張子を登録する。
 """
 
@@ -10,10 +10,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..assets import AssetWriter
-from ..model import Document
+from ..model import Document, Options
 from . import docx_adapter, drawio_adapter, pdf_adapter, pptx_adapter, xlsx_adapter
 
-Adapter = Callable[[Path, AssetWriter], Document]
+Adapter = Callable[[Path, AssetWriter, Options], Document]
 
 ADAPTERS: dict[str, Adapter] = {
     ".docx": docx_adapter.convert,

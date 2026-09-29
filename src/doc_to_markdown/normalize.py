@@ -1,4 +1,4 @@
-"""正規化: 見出し階層・表・箇条書き・空白を一定ルールで整える.
+"""正規化: 見出し階層・表・箇条書き・空白を一定ルールで整える（ストリーム処理）.
 
 ルール
 - 見出しは 1 段ずつしか深くならない（H1 → H3 は H1 → H2 に詰める）
@@ -10,8 +10,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 
-from .model import Block, Heading, ListItem, Paragraph, Table
+from .model import Block, FootnoteDef, Heading, ListItem, Paragraph, Quote, Table
 
 _WS = re.compile(r"[ \t　 ]+")
 
@@ -22,7 +23,7 @@ def clean_text(text: str) -> str:
 
 
 def _normalize_table(t: Table) -> Table | None:
-    rows = [[clean_text(c).replace("\n", " ") for c in r] for r in t.rows]
+    rows = [[clean_text(c) for c in r] for r in t.rows]
     rows = [r for r in rows if any(r)]
     if not rows:
         return None
@@ -33,8 +34,7 @@ def _normalize_table(t: Table) -> Table | None:
     return Table(rows=rows, header=t.header)
 
 
-def normalize(blocks: list[Block]) -> list[Block]:
-    out: list[Block] = []
+def normalize(blocks: Iterable[Block]) -> Iterator[Block]:
     prev_heading = 0
     prev_list_level = -1
     for b in blocks:
@@ -45,11 +45,11 @@ def normalize(blocks: list[Block]) -> list[Block]:
             level = max(1, min(b.level, prev_heading + 1, 6))
             prev_heading = level
             prev_list_level = -1
-            out.append(Heading(level, text))
+            yield Heading(level, text, b.synthetic)
         elif isinstance(b, Paragraph):
             text = clean_text(b.text)
             if text:
-                out.append(Paragraph(text))
+                yield Paragraph(text, b.synthetic)
             prev_list_level = -1
         elif isinstance(b, ListItem):
             text = clean_text(b.text).replace("\n", " ")
@@ -57,12 +57,19 @@ def normalize(blocks: list[Block]) -> list[Block]:
                 continue
             level = max(0, min(b.level, prev_list_level + 1))
             prev_list_level = level
-            out.append(ListItem(text, level, b.ordered))
+            yield ListItem(text, level, b.ordered)
         elif isinstance(b, Table):
             t = _normalize_table(b)
             if t:
-                out.append(t)
+                yield t
             prev_list_level = -1
+        elif isinstance(b, Quote):
+            text = clean_text(b.text)
+            if text:
+                yield Quote(text, b.label)
+            prev_list_level = -1
+        elif isinstance(b, FootnoteDef):
+            text = clean_text(b.text)
+            yield FootnoteDef(b.label, text or "（空）")
         else:
-            out.append(b)
-    return out
+            yield b

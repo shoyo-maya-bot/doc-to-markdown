@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import html
 import re
-import shutil
 import subprocess
 import urllib.parse
 import xml.etree.ElementTree as ET  # noqa: S405 — 型と空要素の生成のみ。解析は defusedxml
@@ -20,12 +19,12 @@ import zlib
 from pathlib import Path
 
 import defusedxml.ElementTree as SafeET
+from devtools_common.executables import DRAWIO, find_executable
 
 from ..assets import AssetWriter
-from ..model import Document, Heading, Image, ListItem, Paragraph
+from ..model import Document, Heading, Image, ListItem, Options, Paragraph
 
 _TAG = re.compile(r"<[^>]+>")
-DRAWIO_BINARIES = ("drawio", "draw.io")
 
 
 def _label(value: str | None) -> str:
@@ -47,7 +46,7 @@ def _diagram_root(diagram: ET.Element) -> ET.Element | None:
 
 
 def find_drawio_cli() -> str | None:
-    return next((p for p in (shutil.which(b) for b in DRAWIO_BINARIES) if p), None)
+    return find_executable(DRAWIO)
 
 
 def export_svg(src: Path, dest: Path, cli: str) -> bool:
@@ -63,7 +62,7 @@ def export_svg(src: Path, dest: Path, cli: str) -> bool:
     return dest.is_file()
 
 
-def convert(path: Path, assets: AssetWriter) -> Document:
+def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Document:
     doc = Document()
     st = doc.stats
     doc.blocks.append(Heading(1, path.stem, synthetic=True))
@@ -76,7 +75,9 @@ def convert(path: Path, assets: AssetWriter) -> Document:
         doc.blocks.append(Image(f"{assets.dir_name}/{svg_name}", alt=path.stem))
         doc.blocks.append(Paragraph(f"編集用ソース: [{path.name}]({source_rel})"))
     else:
-        doc.notes.append("draw.io CLI が見つからないため svg 書き出しを省略（ソースのみ保存）")
+        doc.notes.append(
+            "draw.io Desktop が見つからないため svg 書き出しを省略（ソースのみ保存。場所は DEVTOOLS_DRAWIO で指定可）"
+        )
         doc.blocks.append(Paragraph(f"図のソース: [{path.name}]({source_rel})（svg は draw.io で書き出してください）"))
 
     tree = SafeET.parse(path)  # 信頼できない XML（外部実体・展開攻撃）対策
