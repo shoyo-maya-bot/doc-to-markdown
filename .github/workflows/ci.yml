@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   ci:
-    uses: shoyo-maya-bot/.github/.github/workflows/python-ci.yml@v1
+    uses: shoyo-maya-bot/devtools-workspace/.github/workflows/python-ci.yml@72b159cd57f4827481e4f47d461b33690a3889ea  # devtools-workspace の共通 CI（SHA 固定）
     with:
       # --via-pdf / --recalc / OCR のテスト用（無ければ該当テストは skip される）
       extra-apt-packages: "libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr"
