@@ -9,5 +9,5 @@ permissions:
 
 jobs:
   release:
-    uses: <your-org>/.github/.github/workflows/python-release.yml@v1
+    uses: shoyo-maya-bot/.github/.github/workflows/python-release.yml@v1
     secrets: inherit

@@ -1,7 +1,7 @@
 # doc-to-markdown（doc2md）
 
 各種ドキュメント（Office / PDF / 図）を **Markdown + 抽出図** に変換することだけに責務を絞ったツールです。
-内容の検証（項目間の整合性チェック）は行いません → [field-validation](https://github.com/<your-org>/field-validation) に別プロセスで渡します。
+内容の検証（項目間の整合性チェック）は行いません → [field-validation](https://github.com/shoyo-maya-bot/field-validation) に別プロセスで渡します。
 
 用途の例: 仕様書・手順書を Git 管理下のテキストにする／生成 AI（Copilot）に読ませる前処理／差分レビュー／検索
 

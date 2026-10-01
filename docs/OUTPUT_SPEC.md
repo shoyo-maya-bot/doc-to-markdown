@@ -3,7 +3,7 @@
 doc2md の出力は 2 つあります。
 
 1. **変換結果**: `<出力先>/<元ファイル名>.md` と `<出力先>/<元ファイル名>.assets/`
-2. **変換レポート**: 標準出力（または `-o`）。形式は全ツール共通の [レポート出力形式 仕様書](https://github.com/<your-org>/devtools-common/blob/main/docs/REPORT_FORMAT.md)（schema_version 1.x）
+2. **変換レポート**: 標準出力（または `-o`）。形式は全ツール共通の [レポート出力形式 仕様書](https://github.com/shoyo-maya-bot/devtools-common/blob/main/docs/REPORT_FORMAT.md)（schema_version 1.x）
 
 ## 1. 変換結果（Markdown）
 
