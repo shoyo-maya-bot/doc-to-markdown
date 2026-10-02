@@ -208,5 +208,53 @@ class CliTest(Tmp):
         self.assertEqual(data["meta"]["converted"], 1)
 
 
+class AiOutputTest(Tmp):
+    """AI 向けの出力: Front Matter・llms.txt・dry-run."""
+
+    def test_front_matter_and_id_carried_over(self):
+        src = SAMPLES / "expense-claim.docx"
+        rc, out, _ = run_cli(str(src), "-d", str(self.tmp), "--front-matter", "-f", "json")
+        self.assertEqual(rc, 0)
+        md = (self.tmp / "expense-claim.md").read_text(encoding="utf-8")
+        self.assertTrue(md.startswith('---\ntitle: "expense-claim"\nid: ""\n'))
+        import hashlib
+
+        self.assertIn(hashlib.sha256(src.read_bytes()).hexdigest(), md)
+        # Front Matter はロス検知の統計に影響しない
+        self.assertFalse([f for f in json.loads(out)["findings"] if f["rule_id"].startswith("loss.")])
+        # 人が付けた id は再変換しても残る
+        (self.tmp / "expense-claim.md").write_text(md.replace('id: ""', 'id: "DOC-001"'), encoding="utf-8")
+        run_cli(str(src), "-d", str(self.tmp), "--front-matter")
+        self.assertIn('id: "DOC-001"', (self.tmp / "expense-claim.md").read_text(encoding="utf-8"))
+
+    def test_llms_txt(self):
+        rc, _, _ = run_cli(
+            str(SAMPLES / "expense-claim.docx"),
+            str(SAMPLES / "expense-list.xlsx"),
+            "-d",
+            str(self.tmp),
+            "--front-matter",
+            "--llms-txt",
+        )
+        self.assertEqual(rc, 0)
+        index = (self.tmp / "llms.txt").read_text(encoding="utf-8")
+        self.assertIn("- [経費精算 申請書](expense-claim.md): 元ファイル expense-claim.docx", index)
+        full = (self.tmp / "llms-full.txt").read_text(encoding="utf-8")
+        self.assertIn("<!-- source: expense-list.xlsx -->", full)
+        self.assertNotIn("source_sha256", full)  # 全文ファイルに Front Matter は入れない
+
+    def test_dry_run_writes_nothing(self):
+        rc, out, _ = run_cli(str(SAMPLES), "-d", str(self.tmp / "out"), "--dry-run", "-f", "json")
+        self.assertEqual(rc, 0)
+        self.assertEqual({f["rule_id"] for f in json.loads(out)["findings"]}, {"plan.route"})
+        self.assertFalse((self.tmp / "out").exists())
+
+    def test_dry_run_reports_missing_libreoffice(self):
+        with mock.patch("devtools_common.executables.find_executable", return_value=None):
+            rc, out, _ = run_cli(str(SAMPLES / "expense-claim.docx"), "--via-pdf", "--dry-run", "-f", "json")
+        self.assertEqual(rc, 1)
+        self.assertEqual(json.loads(out)["findings"][0]["rule_id"], "plan.missing_tool")
+
+
 if __name__ == "__main__":
     unittest.main()

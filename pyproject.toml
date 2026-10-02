@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doc-to-markdown"
-version = "0.2.0"
+version = "0.3.0"
 description = "各種ドキュメント（Office/PDF/draw.io）を Markdown + 抽出図に変換する単機能ツール"
 readme = "README.md"
 requires-python = ">=3.10"

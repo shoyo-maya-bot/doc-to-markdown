@@ -4,6 +4,7 @@
 
 - ドキュメント（.docx/.xlsx/.pptx/.pdf/.drawio ほか）の中身を読む必要があれば、バイナリを直接読まずに
   `doc2md <file> -d <outdir> -f json` で Markdown にしてから `<outdir>/<stem>.md` を読む。
+- 複数の資料を AI の前提知識として渡すときは `--front-matter --llms-txt` を付け、`<outdir>/llms-full.txt` を読む。
 - 標準出力の JSON の `findings` に `loss.*`（warning）があれば、変換で欠けた可能性がある。
   利用者に伝えるか、`--via-pdf` で再変換して比較する。
 - 終了コード: 0 成功 / 1 失敗またはロス（--strict）/ 2 使い方の誤り / 3 実行時エラー。

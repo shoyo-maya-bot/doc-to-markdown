@@ -6,6 +6,8 @@
   doc2md 見積.xlsx --header-row 4 -d out/            # 見出し行を指定（シート別: --header-row "4月=4"）
   doc2md scan.pdf --ocr-lang jpn -d out/             # スキャン PDF（要 Tesseract）
   doc2md 手順書.docx --via-pdf -d out/               # レイアウト優先（LibreOffice で PDF 経由）
+  doc2md docs/ -d out/ --front-matter --llms-txt     # AI 向け: 識別情報付き + 全文書の索引/全文ファイル
+  doc2md docs/ --dry-run                             # 変換せず、各ファイルをどう処理するかだけ表示
 
 標準出力には変換レポート（ロス検知・注意事項）を出す。Markdown はファイルに書き出す。
 終了コード: 0 成功 / 1 失敗あり（--strict 時は警告ありも）/ 2 引数・入力の誤り / 3 実行時エラー
@@ -22,8 +24,8 @@ from devtools_common import cli as common_cli
 from devtools_common import report
 from devtools_common.report import Finding, Severity
 
-from . import __version__
-from .adapters import SUPPORTED
+from . import __version__, llmstxt
+from .adapters import OFFICE, SUPPORTED, VIA_PDF_ONLY
 from .converter import collect_inputs, convert_file
 from .model import Options
 
@@ -56,7 +58,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-r", "--recursive", action="store_true", help="ディレクトリを再帰的に探索する")
     p.add_argument("--strict", action="store_true", help="警告（変換ロスの疑い等）があれば終了コード 1")
     p.add_argument("--continue-on-error", action="store_true", help="1 ファイルの失敗で止めずに続行する（バッチ用）")
+    p.add_argument(
+        "--dry-run", action="store_true", help="変換せず、各ファイルの処理方法（読み取り方式・必要な外部ツール）を表示"
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+
+    a = p.add_argument_group("AI 向けの出力")
+    a.add_argument(
+        "--front-matter",
+        action="store_true",
+        help="Markdown の先頭に title / id / source / source_sha256 を付ける（id は前回の出力から引き継ぐ）",
+    )
+    a.add_argument(
+        "--llms-txt",
+        action="store_true",
+        help="出力先に llms.txt（文書一覧）と llms-full.txt（全文の連結）も作る",
+    )
 
     g = p.add_argument_group("Office 共通")
     g.add_argument("--via-pdf", action="store_true", help="LibreOffice で PDF 化してから抽出する（レイアウト優先）")
@@ -116,7 +133,36 @@ def options_from_args(args: argparse.Namespace) -> Options:
         ocr=args.ocr,
         ocr_lang=args.ocr_lang,
         remove_running_headers=not args.keep_running_headers,
+        front_matter=args.front_matter,
     )
+
+
+def plan(files: list[Path], opts: Options) -> list[Finding]:
+    """--dry-run: 各ファイルをどの方式で読むか、外部ツールが要るかを示す（ファイルは書かない）."""
+    from devtools_common.executables import SOFFICE, find_executable
+
+    have_soffice = find_executable(SOFFICE) is not None
+    out: list[Finding] = []
+    for f in files:
+        suffix = f.suffix.lower()
+        if suffix not in SUPPORTED:
+            out.append(Finding("plan.unsupported", Severity.WARNING, "未対応の形式のため変換しません", location=f.name))
+            continue
+        via_pdf = suffix in VIA_PDF_ONLY or (opts.via_pdf and suffix in OFFICE)
+        route = f"{suffix} → PDF 経由（LibreOffice）" if via_pdf else f"{suffix} を直接読み取り"
+        if via_pdf and not have_soffice:
+            out.append(
+                Finding(
+                    "plan.missing_tool",
+                    Severity.ERROR,
+                    f"{route}: LibreOffice が見つかりません",
+                    location=f.name,
+                    suggestion="LibreOffice を入れるか DEVTOOLS_SOFFICE で場所を指定（doc2md --check-env）",
+                )
+            )
+        else:
+            out.append(Finding("plan.route", Severity.INFO, route, location=f.name))
+    return out
 
 
 def check_env() -> int:
@@ -159,6 +205,19 @@ def main(argv: list[str] | None = None) -> int:
     if not files:
         raise common_cli.UsageError("変換対象のファイルがありません")
 
+    if args.dry_run:
+        findings = plan(files, opts)
+        text = report.render(
+            findings,
+            args.format,
+            title="doc2md 変換計画（dry-run）",
+            meta={"inputs": len(files)},
+            tool=TOOL,
+            tool_version=__version__,
+        )
+        common_cli.write_output(text, args.output)
+        return common_cli.ExitCode.FINDINGS if report.has_errors(findings) else common_cli.ExitCode.OK
+
     findings: list[Finding] = []
     converted = []
     for f in files:
@@ -184,6 +243,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         findings.extend(r.findings)
+
+    if args.llms_txt and converted:
+        written = llmstxt.write(args.out_dir, [(r.source.name, r.output) for r in converted])
+        findings.append(Finding("convert.llms_txt", Severity.INFO, "→ " + ", ".join(w.as_posix() for w in written)))
 
     text = report.render(
         findings,

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
+### Added
+
+- `--front-matter`: 出力 Markdown に title / id / source / source_sha256 / generator を付与（id は再変換で引き継ぐ）
+- `--llms-txt`: 出力先に llms.txt（文書一覧）と llms-full.txt（全文連結）を作成
+- `--dry-run`: 変換せず、各ファイルの読み取り方式と不足している外部ソフトを表示
+- `scripts/verify_gates.py`、Copilot への指示に AI エージェントの約束
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

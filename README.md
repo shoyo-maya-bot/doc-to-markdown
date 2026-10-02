@@ -52,7 +52,21 @@ doc2md 規程.docx -d out/ --track-changes show        # 変更履歴を ~~削�
 doc2md scan.pdf -d out/ --ocr-lang jpn               # スキャン PDF
 doc2md 報告書.pdf -d out/ -f json -o report.json     # 変換レポートを JSON で（CI・AI エージェント用）
 doc2md --check-env                                   # 外部ソフトの有無
+doc2md docs/ --dry-run                               # 変換せず、各ファイルの読み方と必要なソフトだけ確認
 ```
+
+### AI に読ませるとき（`--front-matter` / `--llms-txt`）
+
+```bash
+doc2md 設計書/ -d out/ -r --front-matter --llms-txt
+```
+
+- `--front-matter`: 各 Markdown の先頭に `title` / `id` / `source` / `source_sha256` / `generator` を付けます。
+  `id`（例: `DOC-API-001`）は人が付ける識別子で、再変換しても前回の値を引き継ぎます。
+  `source_sha256` は元ファイルの内容ハッシュで、「元の設計書が更新されたのに Markdown が古いまま」を検知できます
+  （[spec-trace](https://github.com/shoyo-maya-bot/spec-trace) の設計書ドリフト検知と組み合わせられます）。
+- `--llms-txt`: 出力先に `llms.txt`（文書一覧）と `llms-full.txt`（全文を 1 ファイルに連結）を作ります。
+  AI に「この資料一式を前提に答えて」と渡すときに使います。
 
 ### 変換ロスの検知（2 段構え）
 
@@ -117,6 +131,7 @@ ruff check . && ruff format --check .
 pytest                    # 外部ソフトが無いテストは skip
 UPDATE_GOLDEN=1 pytest    # 変換結果を意図して変えたとき期待値を更新（差分を PR でレビュー）
 python scripts/bench.py   # 性能測定（要 reportlab）
+python scripts/verify_gates.py   # CI と同じゲートを同じ順で（push 前に）
 ```
 
 テストデータ: `samples/`（プログラム生成）と `samples/realworld/`（**LibreOffice に保存させた** 実務に近い Word/Excel、

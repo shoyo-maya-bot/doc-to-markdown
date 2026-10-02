@@ -131,3 +131,5 @@ class Options:
     ocr_lang: str = "jpn+eng"
     ocr_dpi: int = 300
     remove_running_headers: bool = True  # 全ページに繰り返し出る行（ヘッダー・フッター・ページ番号）を除く
+    # 出力 Markdown の先頭に YAML の Front Matter（title / id / source / source_sha256 / generator）を付ける
+    front_matter: bool = False

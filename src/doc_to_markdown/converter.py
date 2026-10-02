@@ -6,6 +6,9 @@ Markdown ファイルへ順に書き出す。ロス検知用の統計も書き�
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,10 +39,11 @@ class Result:
     findings: list[Finding] = field(default_factory=list)
 
 
-def _write(doc: Document, output: Path) -> lossaudit.OutputStats:
+def _write(doc: Document, output: Path, header: str = "") -> lossaudit.OutputStats:
     stats = lossaudit.OutputStats()
     first = True
     with output.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(header)  # Front Matter（ロス検知の統計には含めない）
         for b in _stream_aware(normalize(doc.blocks)):
             if isinstance(b, StreamTable):  # 大きな表は 1 行ずつ書く
                 if not first:
@@ -101,6 +105,7 @@ def convert_file(src: Path, out_dir: Path, *, via_pdf: bool = False, options: Op
         shutil.rmtree(assets_dir)
     assets = AssetWriter(out_dir, stem)
     output = out_dir / f"{stem}.md"
+    header = front_matter(src, stem, existing_id(output)) if opts.front_matter else ""
 
     if use_pdf:
         with secure_tempdir("doc2md-") as tmp:
@@ -108,16 +113,60 @@ def convert_file(src: Path, out_dir: Path, *, via_pdf: bool = False, options: Op
             doc = pdf_adapter.convert(pdf, assets, opts)
             # PDF のファイル名由来の H1 を元ファイル名に戻す（ブロックは逐次生成なので先頭だけ差し替える）
             doc.blocks = _retitle(doc.blocks, stem)
-            out = _write(doc, output)  # 一時 PDF を読み終えてから削除する
+            out = _write(doc, output, header)  # 一時 PDF を読み終えてから削除する
     else:
         doc = ADAPTERS[suffix](src, assets, opts)
-        out = _write(doc, output)
+        out = _write(doc, output, header)
 
     findings = lossaudit.audit(doc.stats, out, location=src.name, raw_text_chars=doc.raw_text_chars)
     findings += [Finding("convert.warning", Severity.WARNING, w, location=src.name) for w in doc.warnings]
     findings += [Finding("convert.note", Severity.INFO, n, location=src.name) for n in doc.notes]
     log.info("converted %s -> %s (%d chars, %d assets)", src.name, output.name, doc.stats.text_chars, assets.count)
     return Result(src, output, doc.stats, assets.count, use_pdf, findings)
+
+
+_ID_LINE = re.compile(r"^id:\s*(.*?)\s*$", re.M)
+
+
+def existing_id(output: Path) -> str:
+    """前回の出力の Front Matter に人が付けた id があれば引き継ぐ（再変換で消さない）."""
+    if not output.is_file():
+        return ""
+    with output.open(encoding="utf-8") as f:
+        head = f.read(4096)
+    if not head.startswith("---\n"):
+        return ""
+    end = head.find("\n---\n", 4)
+    m = _ID_LINE.search(head[4:end] if end > 0 else "")
+    return json.loads(m.group(1)) if m and m.group(1).startswith('"') else (m.group(1) if m else "")
+
+
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def front_matter(src: Path, title: str, doc_id: str = "") -> str:
+    """AI や他ツールが文書を特定するための Front Matter.
+
+    - id は人が付ける識別子（例: DOC-API-001）。変換では作らず、前回の出力にあれば引き継ぐ
+    - source_sha256 は元ファイルの内容ハッシュ。元文書が更新されたか（ドリフト）の判定に使える
+    - 日時は入れない（同じ入力から常に同じ出力にするため）
+    """
+    from . import __version__
+
+    fields = {
+        "title": title,
+        "id": doc_id,
+        "source": src.name,
+        "source_sha256": sha256_of(src),
+        "generator": f"doc2md {__version__}",
+    }
+    lines = [f"{k}: {json.dumps(v, ensure_ascii=False)}" for k, v in fields.items()]
+    return "---\n" + "\n".join(lines) + "\n---\n\n"
 
 
 def _retitle(blocks, stem: str):
