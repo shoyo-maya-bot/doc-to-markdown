@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
+### Added
+
+- `figspec`: 図の定義（YAML / JSON）から編集できる draw.io を生成。線のルール検査（宙に浮いた線・自己ループ・重複・判断のラベル・
+  孤立ノード・重なり）、自動配置、`--svg`。Copilot の `/figspec-draw`
+- docs/MIGRATION_GUIDE.md: 設計書を Markdown に移すロット運用と突合チェックリスト
+
 ## [0.3.0] - 2026-10-02
 
 ### Added

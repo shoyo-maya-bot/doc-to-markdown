@@ -1,0 +1,17 @@
+# figspec の例: 経費の承認フロー（架空）
+title: 経費精算の承認フロー
+direction: LR
+nodes:
+  - {id: apply, label: 申請者が申請, shape: terminal}
+  - {id: check, label: 金額は 10 万円以上？, shape: decision}
+  - {id: manager, label: 課長承認}
+  - {id: director, label: 部長承認}
+  - {id: account, label: 経理で支払, shape: process}
+  - {id: done, label: 完了, shape: terminal}
+edges:
+  - {from: apply, to: check}
+  - {from: check, to: manager, label: いいえ}
+  - {from: check, to: director, label: はい}
+  - {from: manager, to: account}
+  - {from: director, to: account}
+  - {from: account, to: done}

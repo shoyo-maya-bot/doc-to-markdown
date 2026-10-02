@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doc-to-markdown"
-version = "0.3.0"
+version = "0.4.0"
 description = "各種ドキュメント（Office/PDF/draw.io）を Markdown + 抽出図に変換する単機能ツール"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,7 @@ dev = ["pytest>=8", "ruff>=0.6", "jsonschema>=4.18"]
 
 [project.scripts]
 doc2md = "doc_to_markdown.cli:entrypoint"
+figspec = "doc_to_markdown.figspec:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]

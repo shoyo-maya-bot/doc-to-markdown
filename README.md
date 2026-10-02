@@ -68,6 +68,21 @@ doc2md 設計書/ -d out/ -r --front-matter --llms-txt
 - `--llms-txt`: 出力先に `llms.txt`（文書一覧）と `llms-full.txt`（全文を 1 ファイルに連結）を作ります。
   AI に「この資料一式を前提に答えて」と渡すときに使います。
 
+### 図を作る（figspec）
+
+箱と矢印を YAML で書き、**編集できる draw.io ファイル** を作ります。AI に図を描かせるときも、画像ではなくこの形式で出させると、
+人が draw.io で手直しでき、Git で差分も追えます。Copilot Chat では `/figspec-draw`。
+
+```bash
+figspec check samples/figspec/approval-flow.yaml            # 定義の誤り・線のルール違反
+figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io があれば .svg も）
+```
+
+線のルール: 直交線のみ・宙に浮いた線なし・自己ループなし・判断（decision）から出る線にはラベル。
+作った .drawio は doc2md で Markdown（要素と接続の一覧）に戻せるので、図の内容をレビューや AI への入力にも使えます。
+
+設計書を Markdown に移す進め方（ロット運用・突合チェックリスト）は [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)。
+
 ### 変換ロスの検知（2 段構え）
 
 1. **構造**: 変換時に認識した見出し・箇条書き・表・行・画像の数と、出力の数を比べる（整形で落ちたものを検知）
