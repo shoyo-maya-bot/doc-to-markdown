@@ -1,7 +1,7 @@
 # doc-to-markdown（doc2md）
 
 各種ドキュメント（Office / PDF / 図）を **Markdown + 抽出図** に変換することだけに責務を絞ったツールです。
-内容の検証（項目間の整合性チェック）は行いません → [field-validation](https://github.com/shoyo-maya-bot/field-validation) に別プロセスで渡します。
+内容の検証（項目間の整合性チェック）は行いません → [fieldcheck](https://github.com/shoyo-maya-bot/office-review/tree/main/fieldcheck)（[office-review](https://github.com/shoyo-maya-bot/office-review) に同梱）に別プロセスで渡します。
 
 用途の例: 仕様書・手順書を Git 管理下のテキストにする／生成 AI（Copilot）に読ませる前処理／差分レビュー／検索
 
@@ -64,7 +64,7 @@ doc2md 設計書/ -d out/ -r --front-matter --llms-txt
 - `--front-matter`: 各 Markdown の先頭に `title` / `id` / `source` / `source_sha256` / `generator` を付けます。
   `id`（例: `DOC-API-001`）は人が付ける識別子で、再変換しても前回の値を引き継ぎます。
   `source_sha256` は元ファイルの内容ハッシュで、「元の設計書が更新されたのに Markdown が古いまま」を検知できます
-  （[spec-trace](https://github.com/shoyo-maya-bot/spec-trace) の設計書ドリフト検知と組み合わせられます）。
+  （[spec-trace](https://github.com/shoyo-maya-bot/ai-coding/tree/main/tools/spec-trace)（ai-coding に同梱）の設計書ドリフト検知と組み合わせられます）。
 - `--llms-txt`: 出力先に `llms.txt`（文書一覧）と `llms-full.txt`（全文を 1 ファイルに連結）を作ります。
   AI に「この資料一式を前提に答えて」と渡すときに使います。
 
