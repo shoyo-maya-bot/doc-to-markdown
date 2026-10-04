@@ -11,6 +11,8 @@
 2. **Windows**: `setup.cmd` をダブルクリック ／ **macOS・Linux**: `./setup.sh`
 3. VS Code でこのフォルダを開き、Copilot Chat で **`/doc2md-convert`** と入力 → ファイルのパスを指定
 
+実務での流れ（変換 → 警告を見る → 人が突合 → 次のツールへ）は **[WORKFLOW.md](WORKFLOW.md)**。
+
 | Copilot のプロンプト | 何をするか |
 |---|---|
 | `/doc2md-convert` | 変換して、注意点（変更履歴・非表示行・OCR など）と中身の概要を報告 |
