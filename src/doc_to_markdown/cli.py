@@ -26,7 +26,7 @@ from devtools_common.report import Finding, Severity
 
 from . import __version__, llmstxt
 from .adapters import OFFICE, SUPPORTED, VIA_PDF_ONLY
-from .converter import collect_inputs, convert_file
+from .converter import collect_inputs, convert_file, output_names
 from .model import Options
 
 TOOL = "doc2md"
@@ -220,9 +220,22 @@ def main(argv: list[str] | None = None) -> int:
 
     findings: list[Finding] = []
     converted = []
+    names = output_names(files)
     for f in files:
+        sub, name = names[f]
+        if (sub, name) != (Path(), f.stem):  # 同じ出力名の入力があるので名前を変える（黙って上書きしない）
+            dest = (sub / f"{name}.md").as_posix()
+            print(f"doc2md: 出力名が他の入力と重なるため {f.as_posix()} → {dest} に書き出します", file=sys.stderr)
+            findings.append(
+                Finding(
+                    "convert.renamed",
+                    Severity.INFO,
+                    f"出力名が他の入力と重なるため {dest} に書き出します",
+                    location=f.name,
+                )
+            )
         try:
-            r = convert_file(f, args.out_dir, options=opts)
+            r = convert_file(f, args.out_dir / sub, options=opts, name=name)
         except common_cli.UsageError:
             raise
         except Exception as e:  # noqa: BLE001

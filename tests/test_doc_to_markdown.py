@@ -208,6 +208,85 @@ class CliTest(Tmp):
         self.assertEqual(data["meta"]["converted"], 1)
 
 
+class OutputNameCollisionTest(Tmp):
+    """出力名が重なる入力を 1 回で変換しても、前の出力を黙って上書きしない."""
+
+    def _copy(self, sample: Path, rel: str) -> Path:
+        dst = self.tmp / "in" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(sample, dst)
+        return dst
+
+    def test_same_stem_different_suffix_keeps_both(self):
+        self._copy(SAMPLES / "expense-claim.docx", "spec.docx")
+        self._copy(SAMPLES / "expense-list.xlsx", "spec.xlsx")
+        out = self.tmp / "out"
+        rc, report_json, err = run_cli(str(self.tmp / "in"), "-d", str(out), "-f", "json")
+        self.assertEqual(rc, 0)
+        self.assertFalse((out / "spec.md").exists())
+        docx_md = (out / "spec.docx.md").read_text(encoding="utf-8")
+        xlsx_md = (out / "spec.xlsx.md").read_text(encoding="utf-8")
+        self.assertIn("経費精算 申請書", docx_md)
+        self.assertIn("(spec.docx.assets/spec.docx-01.png)", docx_md)  # 抽出図も別フォルダ
+        self.assertTrue((out / "spec.docx.assets" / "spec.docx-01.png").is_file())
+        self.assertNotEqual(docx_md, xlsx_md)
+        self.assertIn("spec.docx.md", err)  # 名前を変えたことを stderr で知らせる
+        renamed = [f for f in json.loads(report_json)["findings"] if f["rule_id"] == "convert.renamed"]
+        self.assertEqual(len(renamed), 2)
+
+    def test_same_name_in_subfolders_keeps_structure(self):
+        self._copy(SAMPLES / "expense-claim.docx", "a/spec.docx")
+        self._copy(SAMPLES / "realworld" / "policy-revision.docx", "b/spec.docx")
+        self._copy(SAMPLES / "expense-list.xlsx", "b/list.xlsx")
+        out = self.tmp / "out"
+        rc, _, _ = run_cli(str(self.tmp / "in"), "-d", str(out), "-r", "--llms-txt")
+        self.assertEqual(rc, 0)
+        a = (out / "a" / "spec.md").read_text(encoding="utf-8")
+        b = (out / "b" / "spec.md").read_text(encoding="utf-8")
+        self.assertNotEqual(a, b)
+        self.assertTrue((out / "a" / "spec.assets" / "spec-01.png").is_file())
+        self.assertTrue((out / "list.md").is_file())  # 重ならない名前は今までどおり
+        index = (out / "llms.txt").read_text(encoding="utf-8")
+        self.assertIn("(a/spec.md)", index)
+        self.assertIn("(b/spec.md)", index)
+
+    def test_output_names_are_deterministic_and_unique(self):
+        from doc_to_markdown.converter import output_names
+
+        files = [
+            Path("in/a/Spec.docx"),
+            Path("in/b/spec.docx"),
+            Path("in/a/spec.xlsx"),
+            Path("in/c/other.pdf"),
+            Path("in/spec.docx.xlsx"),
+        ]
+        names = output_names(files)
+        self.assertEqual(names, output_names(list(reversed(files))))
+        keys = [(sub / f"{stem}.md").as_posix().casefold() for sub, stem in names.values()]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(names[Path("in/c/other.pdf")], (Path(), "other"))
+
+    def test_same_file_given_twice_is_converted_once(self):
+        from doc_to_markdown.converter import collect_inputs
+
+        src = self._copy(SAMPLES / "expense-list.xlsx", "list.xlsx")
+        twice = collect_inputs([src, src.parent / ".." / "in" / src.name], recursive=False)
+        self.assertEqual(len(twice), 1)
+
+    def test_front_matter_id_not_taken_from_other_source(self):
+        src = self._copy(SAMPLES / "expense-claim.docx", "spec.docx")
+        out = self.tmp / "out"
+        out.mkdir()
+        prev = '---\ntitle: "x"\nid: "DOC-9"\nsource: "spec.xlsx"\n---\n\n# x\n'
+        (out / "spec.md").write_text(prev, encoding="utf-8")
+        rc, report_json, _ = run_cli(str(src), "-d", str(out), "--front-matter", "-f", "json")
+        self.assertEqual(rc, 0)
+        md = (out / "spec.md").read_text(encoding="utf-8")
+        self.assertIn('id: ""', md)  # 別の元ファイルの id は引き継がない
+        rules = [f["rule_id"] for f in json.loads(report_json)["findings"]]
+        self.assertIn("convert.overwrite_other_source", rules)
+
+
 class AiOutputTest(Tmp):
     """AI 向けの出力: Front Matter・llms.txt・dry-run."""
 

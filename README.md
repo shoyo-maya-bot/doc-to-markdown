@@ -47,6 +47,7 @@
 
 ```bash
 doc2md 仕様書.docx -d out/                          # out/仕様書.md と out/仕様書.assets/
+doc2md 仕様書.docx 仕様書.xlsx -d out/               # 名前が重なると out/仕様書.docx.md と out/仕様書.xlsx.md
 doc2md docs/ -d out/ -r --continue-on-error         # フォルダ一括（1 ファイル失敗しても続行）
 doc2md 見積.xlsx -d out/ --header-row "4月=4"        # 見出し行を指定（全シートなら --header-row 4）
 doc2md 台帳.xlsx -d out/ --skip-hidden --recalc      # 非表示を除く・数式を再計算
@@ -56,6 +57,10 @@ doc2md 報告書.pdf -d out/ -f json -o report.json     # 変換レポートを 
 doc2md --check-env                                   # 外部ソフトの有無
 doc2md docs/ --dry-run                               # 変換せず、各ファイルの読み方と必要なソフトだけ確認
 ```
+
+出力名が重なる入力（拡張子だけ違う、別フォルダに同じ名前）は、上書きせずに名前を変えて書き出します。
+拡張子だけ違うときは `仕様書.docx.md` のように拡張子を残し、別フォルダの同じ名前はフォルダ構成（`a/仕様書.md`）を残します。
+名前を変えたときは標準エラーとレポート（`convert.renamed`）で知らせます。詳しくは [docs/OUTPUT_SPEC.md](docs/OUTPUT_SPEC.md)。
 
 ### AI に読ませるとき（`--front-matter` / `--llms-txt`）
 

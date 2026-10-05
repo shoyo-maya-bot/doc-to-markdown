@@ -17,7 +17,13 @@ doc2md の出力は 2 つあります。
 
 - **決定的**: 同じ入力・同じオプションなら、バイト単位で同じ出力になります（時刻・乱数を含めない）。
 - 再実行すると `<stem>.assets/` は作り直されます（古い画像は残りません）。
-- 同じフォルダに同名（拡張子違い）のファイルがあると上書きし合うため、別の出力先を指定してください。
+- 1 回の実行で出力名が重なる入力があっても、前の出力を上書きしません。重なったものだけ名前を変えます（標準エラーと `convert.renamed` で通知）。
+  - 拡張子だけ違う（`spec.docx` と `spec.xlsx`）: `spec.docx.md` と `spec.xlsx.md`（抽出図は `spec.docx.assets/` 等）
+  - 別フォルダの同じ名前（`a/spec.docx` と `b/spec.docx`）: フォルダ構成を残して `a/spec.md` と `b/spec.md`
+  - それでも重なる（大文字小文字だけ違う 等）: 入力のパス順に `-2`, `-3` … を付ける
+  - 重ならない入力の名前は今までどおりです。比較は大文字小文字を区別しません（Windows・macOS に合わせる）。
+- 前回の実行の出力は、同じ名前なら上書きします（再変換）。`--front-matter` 付きの出力で `source` が別の元ファイルなら、
+  `convert.overwrite_other_source`（warning）を出し、その `id` は引き継ぎません。
 
 ### 構造の約束
 
@@ -59,7 +65,7 @@ OCR したページは改行を保ったまま出力する（推測で結合し�
 ```yaml
 ---
 title: "<元ファイル名（拡張子なし）>"
-id: "<人が付ける識別子。空なら未付与。再変換で前回の値を引き継ぐ>"
+id: "<人が付ける識別子。空なら未付与。再変換で前回の値を引き継ぐ（source が同じときだけ）>"
 source: "<元ファイル名>"
 source_sha256: "<元ファイルの SHA-256（16 進 64 桁）>"
 generator: "doc2md <版>"
@@ -91,6 +97,8 @@ Front Matter は変換ロス検知の集計に含めない。
 |---|---|---|---|
 | `convert.ok` | info | 変換成功。`message` に出力先、`actual` に統計（`headings= lists= tables= rows= images= chars=`、PDF 経由なら `via-pdf`） | — |
 | `convert.note` | info | 形式ごとの注意事項（結合セルを埋めた、2 段組みとして読んだ 等） | 必要に応じて確認 |
+| `convert.renamed` | info | 出力名が他の入力と重なったため、別の名前で書き出した（`message` に出力先） | 出力先のファイル名を確認 |
+| `convert.overwrite_other_source` | warning | 既存の出力（前回の実行）が別の元ファイルから作られていたが上書きした | 出力先を分けるか、古い出力を整理 |
 | `convert.warning` | warning | 利用者が確認すべき事項（未確定の変更履歴、非表示行を含む、数式の計算結果が無い、OCR したページがある、OCR できない 等） | **内容を確認**。AI エージェントは利用者に伝える |
 | `loss.headings` / `loss.list_items` / `loss.tables` / `loss.table_rows` / `loss.images` | warning | 変換時に認識した要素より出力が少ない（整形の段階で欠落） | 目視確認。不具合の可能性 |
 | `loss.text` | warning | 本文の文字数が認識した量の 95% 未満 | 同上 |

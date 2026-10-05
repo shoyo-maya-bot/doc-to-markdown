@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -90,7 +91,19 @@ def _stream_aware(blocks):
     yield from flush()
 
 
-def convert_file(src: Path, out_dir: Path, *, via_pdf: bool = False, options: Options | None = None) -> Result:
+def convert_file(
+    src: Path,
+    out_dir: Path,
+    *,
+    via_pdf: bool = False,
+    options: Options | None = None,
+    name: str | None = None,
+) -> Result:
+    """src を変換して `<out_dir>/<name>.md` と `<out_dir>/<name>.assets/` に書き出す.
+
+    name を省略すると元ファイル名の拡張子を除いたもの。複数ファイルを 1 つの出力先に書くときは
+    `output_names` で重ならない名前を決めてから渡す（見出しや Front Matter の title は常に元ファイル名）。
+    """
     opts = options or Options(via_pdf=via_pdf)
     if via_pdf:
         opts.via_pdf = True
@@ -99,13 +112,29 @@ def convert_file(src: Path, out_dir: Path, *, via_pdf: bool = False, options: Op
         raise UsageError(f"未対応の形式です: {src.name}（対応: {', '.join(sorted(SUPPORTED))}）")
     use_pdf = suffix in VIA_PDF_ONLY or (opts.via_pdf and suffix in OFFICE)
     stem = src.stem
+    name = name or stem
     out_dir.mkdir(parents=True, exist_ok=True)
-    assets_dir = out_dir / f"{stem}.assets"
+    output = out_dir / f"{name}.md"
+    findings: list[Finding] = []
+    prev_source = existing_source(output)
+    other_source = prev_source not in ("", src.name)
+    if other_source:  # 前回の実行で別の元ファイルから作った出力（Front Matter の source で判定）
+        log.warning("overwriting %s (previously converted from %s) with %s", output.name, prev_source, src.name)
+        findings.append(
+            Finding(
+                "convert.overwrite_other_source",
+                Severity.WARNING,
+                f"既存の {output.name} は別の元ファイル {prev_source} から作られたものですが、上書きしました",
+                location=src.name,
+                suggestion="出力先を分けるか、不要になった古い出力を削除してください",
+            )
+        )
+    assets_dir = out_dir / f"{name}.assets"
     if assets_dir.exists():  # 再実行時に古い抽出図が残らないようにする（決定的な出力）
         shutil.rmtree(assets_dir)
-    assets = AssetWriter(out_dir, stem)
-    output = out_dir / f"{stem}.md"
-    header = front_matter(src, stem, existing_id(output)) if opts.front_matter else ""
+    assets = AssetWriter(out_dir, name)
+    doc_id = "" if other_source else existing_id(output)  # 別文書の id は引き継がない
+    header = front_matter(src, stem, doc_id) if opts.front_matter else ""
 
     if use_pdf:
         with secure_tempdir("doc2md-") as tmp:
@@ -118,7 +147,7 @@ def convert_file(src: Path, out_dir: Path, *, via_pdf: bool = False, options: Op
         doc = ADAPTERS[suffix](src, assets, opts)
         out = _write(doc, output, header)
 
-    findings = lossaudit.audit(doc.stats, out, location=src.name, raw_text_chars=doc.raw_text_chars)
+    findings += lossaudit.audit(doc.stats, out, location=src.name, raw_text_chars=doc.raw_text_chars)
     findings += [Finding("convert.warning", Severity.WARNING, w, location=src.name) for w in doc.warnings]
     findings += [Finding("convert.note", Severity.INFO, n, location=src.name) for n in doc.notes]
     log.info("converted %s -> %s (%d chars, %d assets)", src.name, output.name, doc.stats.text_chars, assets.count)
@@ -128,17 +157,80 @@ def convert_file(src: Path, out_dir: Path, *, via_pdf: bool = False, options: Op
 _ID_LINE = re.compile(r"^id:\s*(.*?)\s*$", re.M)
 
 
-def existing_id(output: Path) -> str:
-    """前回の出力の Front Matter に人が付けた id があれば引き継ぐ（再変換で消さない）."""
+_SOURCE_LINE = re.compile(r"^source:\s*(.*?)\s*$", re.M)
+
+
+def _front_matter_field(output: Path, rx: re.Pattern[str]) -> str:
     if not output.is_file():
         return ""
-    with output.open(encoding="utf-8") as f:
+    with output.open(encoding="utf-8", errors="replace") as f:
         head = f.read(4096)
     if not head.startswith("---\n"):
         return ""
     end = head.find("\n---\n", 4)
-    m = _ID_LINE.search(head[4:end] if end > 0 else "")
-    return json.loads(m.group(1)) if m and m.group(1).startswith('"') else (m.group(1) if m else "")
+    m = rx.search(head[4:end] if end > 0 else "")
+    if not m:
+        return ""
+    try:
+        return json.loads(m.group(1)) if m.group(1).startswith('"') else m.group(1)
+    except ValueError:
+        return m.group(1)
+
+
+def existing_id(output: Path) -> str:
+    """前回の出力の Front Matter に人が付けた id があれば引き継ぐ（再変換で消さない）."""
+    return _front_matter_field(output, _ID_LINE)
+
+
+def existing_source(output: Path) -> str:
+    """前回の出力の Front Matter にある元ファイル名（無ければ空）."""
+    return _front_matter_field(output, _SOURCE_LINE)
+
+
+def output_names(files: list[Path]) -> dict[Path, tuple[Path, str]]:
+    """複数の入力を 1 つの出力先に書くときの、重ならない出力名を決める.
+
+    戻り値は 入力 → (出力先からの相対フォルダ, 拡張子を除いた出力名)。入力の並び順によらず同じ結果になる。
+
+    - 名前（拡張子を除く）が重ならなければ今までどおり `spec.md`
+    - 拡張子だけが違う（spec.docx と spec.xlsx）なら拡張子を残す: `spec.docx.md` / `spec.xlsx.md`
+    - 別フォルダの同じ名前（a/spec.docx と b/spec.docx）ならフォルダ構成を残す: `a/spec.md` / `b/spec.md`
+    - それでも重なる（大文字小文字だけ違う等）なら `-2`, `-3` … を付ける
+
+    Windows・macOS では大文字小文字を区別しないことが多いため、比較は大文字小文字を無視する。
+    """
+    files = sorted(set(files))
+    groups: dict[str, list[Path]] = {}
+    for f in files:
+        groups.setdefault(f.stem.casefold(), []).append(f)
+
+    names: dict[Path, tuple[Path, str]] = {}
+    for group in groups.values():
+        if len(group) == 1:
+            names[group[0]] = (Path(), group[0].stem)
+        elif len({f.name.casefold() for f in group}) == len(group):
+            for f in group:
+                names[f] = (Path(), f.name)
+        else:
+            parents = {f: f.parent.resolve() for f in group}
+            common = Path(os.path.commonpath(list(parents.values())))
+            by_sub: dict[Path, list[Path]] = {}
+            for f in group:
+                by_sub.setdefault(parents[f].relative_to(common), []).append(f)
+            for sub, members in by_sub.items():
+                for f in members:
+                    names[f] = (sub, f.stem if len(members) == 1 else f.name)
+
+    used: set[str] = set()
+    for f in files:  # 最後の砦: 並び順で決まる連番
+        sub, name = names[f]
+        base, n = name, 1
+        while (sub / f"{name}.md").as_posix().casefold() in used:
+            n += 1
+            name = f"{base}-{n}"
+        used.add((sub / f"{name}.md").as_posix().casefold())
+        names[f] = (sub, name)
+    return names
 
 
 def sha256_of(path: Path) -> str:
@@ -188,13 +280,17 @@ def collect_inputs(paths: list[Path], *, recursive: bool) -> list[Path]:
             files.append(p)
         else:
             raise UsageError(f"入力が見つかりません: {p}")
-    return sorted(set(files))
+    unique: dict[Path, Path] = {}  # 同じファイルを別の書き方で 2 回指定しても 1 回だけ変換する
+    for f in sorted(set(files)):
+        unique.setdefault(f.resolve(), f)
+    return sorted(unique.values())
 
 
 __all__ = [
     "Result",
     "convert_file",
     "collect_inputs",
+    "output_names",
     "find_soffice",
     "office_to_pdf",
     "libreoffice_convert",

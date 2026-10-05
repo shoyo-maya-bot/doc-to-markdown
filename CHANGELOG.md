@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 出力名が重なる複数の入力（`spec.docx` と `spec.xlsx`、別フォルダの同じ名前）を 1 回で変換すると、
+  後のファイルが前の出力と抽出図を黙って上書きしていた問題を修正
+  - 拡張子だけ違うときは `spec.docx.md` / `spec.xlsx.md`、別フォルダの同じ名前は `a/spec.md` / `b/spec.md` に書き出す
+  - 名前を変えたときは標準エラーとレポート（`convert.renamed`）で知らせる。重ならない入力の名前は変わらない
+- `--front-matter`: 既存の出力が別の元ファイルから作られていたとき、その `id` を引き継いでいた問題を修正。
+  上書きしたことを `convert.overwrite_other_source`（warning）で知らせる
+- 同じファイルを別の書き方（`docs/a.docx` と `./docs/a.docx`）で 2 回指定すると 2 回変換していた問題を修正
+
 ## [0.4.0] - 2026-10-02
 
 ### Added
