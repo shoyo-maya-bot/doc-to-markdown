@@ -158,3 +158,8 @@ python scripts/verify_gates.py   # CI と同じゲートを同じ順で（push �
 
 テストデータ: `samples/`（プログラム生成）と `samples/realworld/`（**LibreOffice に保存させた** 実務に近い Word/Excel、
 2 段組み・スキャン PDF。`samples/realworld/make_realworld.py` で再生成）。内容はすべて架空です。
+
+## セキュリティ・ライセンス
+
+- 脆弱性を見つけたら、公開の Issue ではなく [SECURITY.md](SECURITY.md) の方法で知らせてください
+- ライセンスは [MIT](LICENSE) です
