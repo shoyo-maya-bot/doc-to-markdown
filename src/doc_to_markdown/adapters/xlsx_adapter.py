@@ -12,13 +12,13 @@
 | 表の下の注記（※…） | 表の後ろに段落として出す |
 | 非表示の行・列・シート | 既定は出力して注記。`--skip-hidden` で除外 |
 | 数式 | 保存されている計算結果を出す。結果が無いブックは警告（`--recalc` で LibreOffice 再計算） |
-| パーセント表示のセル | `10%` のように表示形式どおりに出す |
+| セルの表示形式 | ゼロ埋め・桁区切り・小数桁・%・通貨・日付・和暦を表示形式どおりに出す（xlsx_numfmt） |
+| 再現できない表示形式 | 書式なしの値を出し、`loss.number_format` で報告 |
 | 大きなブック | 20 万セル（`--max-cells`）を超えると省メモリ読み込み（1 シート = 1 表、結合の解決なし） |
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import math
 import re
 import zipfile
@@ -33,30 +33,14 @@ from openpyxl.utils import get_column_letter
 
 from ..assets import AssetWriter
 from ..model import Block, Document, Heading, Options, Paragraph, StreamTable, Table, count_chars
+from .xlsx_numfmt import render_value
 
 NOTE_PREFIXES = ("※", "注", "備考", "＊", "*")
 MAX_HEADER_DEPTH = 3
 
 
 def format_value(v, number_format: str = "") -> str:
-    if v is None:
-        return ""
-    if isinstance(v, bool):
-        return "TRUE" if v else "FALSE"
-    if isinstance(v, (int, float)) and "%" in (number_format or ""):
-        decimals = 0
-        if "." in number_format:
-            decimals = len(number_format.split(".", 1)[1].split("%", 1)[0].strip("_ )"))
-        return f"{v * 100:.{decimals}f}%"
-    if isinstance(v, float):
-        if math.isnan(v) or math.isinf(v):
-            return str(v)
-        return str(int(v)) if v.is_integer() else repr(v)
-    if isinstance(v, dt.datetime):
-        return v.date().isoformat() if v.time() == dt.time(0) else v.isoformat(sep=" ", timespec="minutes")
-    if isinstance(v, (dt.date, dt.time)):
-        return v.isoformat()
-    return str(v)
+    return render_value(v, number_format)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -88,11 +72,15 @@ class Grid:
         for dim in ws.column_dimensions.values():
             if dim.hidden and dim.min and dim.max:
                 self.hidden_cols.update(range(dim.min, dim.max + 1))
+        # 再現できなかった表示形式 → そのセル（行, 列）の一覧
+        self.unsupported_formats: dict[str, list[tuple[int, int]]] = {}
         for row in ws.iter_rows():
             for c in row:
                 if c.value is None:
                     continue
-                text = format_value(c.value, c.number_format)
+                text, faithful = render_value(c.value, c.number_format)
+                if not faithful:
+                    self.unsupported_formats.setdefault(c.number_format, []).append((c.row, c.column))
                 if text.strip():
                     self.values[(c.row, c.column)] = text
         for rng in ws.merged_cells.ranges:
@@ -191,7 +179,8 @@ def _logical_cells(g: Grid, r: int, c0: int, c1: int) -> list[str]:
 
 def _is_number(s: str) -> bool:
     try:
-        float(s.replace(",", "").rstrip("%"))
+        # 表示形式で付いた桁区切り・%・通貨記号・括弧（会計の負数）は数値の一部とみなす
+        float(s.replace(",", "").strip().strip("()¥￥$円%").strip())
         return True
     except ValueError:
         return False
@@ -425,10 +414,11 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
     if not full:
         doc.notes.append(
             f"大きなブック（{cells:,} セル）のため省メモリで読み込み: "
-            "セル結合・複数の表・非表示の判定は行わず、1 シート = 1 表で出力"
+            "セル結合・複数の表・非表示の判定と表示形式の反映は行わず、1 シート = 1 表で出力"
         )
     raw = 0
     hidden_rows = hidden_sheets = filled = 0
+    lost_formats: dict[str, list[str]] = {}  # 再現できなかった表示形式 → セル（シート名!A1）
     try:
         for ws in wb.worksheets:
             hidden = getattr(ws, "sheet_state", "visible") != "visible"
@@ -444,6 +434,10 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
             g = Grid(ws, opts)
             raw += count_chars(g.output_text())
             hidden_rows += len([r for r in g.hidden_rows if any(k[0] == r for k in g.values)])
+            for fmt, cells in g.unsupported_formats.items():
+                lost_formats.setdefault(fmt, []).extend(
+                    f"{ws.title}!{get_column_letter(c)}{r}" for r, c in cells if g.visible(r, c)
+                )
             res = sheet_blocks(ws, g, opts, ws.title)
             st.tables += res.tables
             st.table_rows += res.rows
@@ -460,6 +454,17 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
         doc.warnings.append(f"非表示の行 {hidden_rows} 行を含めて出力しています（除外するには --skip-hidden）")
     if filled:
         doc.notes.append(f"縦に結合されたセル {filled} 個は上の値を繰り返して出力")
+    for fmt, refs in lost_formats.items():
+        if refs:
+            doc.losses.append(("loss.number_format", number_format_message(fmt, refs), NUMBER_FORMAT_SUGGESTION))
+
+
+NUMBER_FORMAT_SUGGESTION = "元の Excel で該当セルの表示を確認し、必要なら Markdown を手で直してください"
+
+
+def number_format_message(fmt: str, refs: list[str], shown: int = 5) -> str:
+    cells = ", ".join(refs[:shown]) + (f" ほか {len(refs) - shown} セル" if len(refs) > shown else "")
+    return f"表示形式 `{fmt}` を再現できないため、{len(refs)} セルを書式なしの値で出力しました: {cells}"
 
 
 def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Document:

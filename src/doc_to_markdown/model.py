@@ -107,6 +107,9 @@ class Document:
     stats: SourceStats = field(default_factory=SourceStats)
     notes: list[str] = field(default_factory=list)  # 変換時の注意事項（レポートに info として出す）
     warnings: list[str] = field(default_factory=list)  # 利用者が確認すべき事項（レポートに warning として出す）
+    # 変換で再現できなかった要素（rule_id, message, suggestion）. レポートに warning として出す
+    # （例: loss.number_format）
+    losses: list[tuple[str, str, str]] = field(default_factory=list)
     raw_text_chars: int | None = None  # 別経路で数えた元ファイルの本文文字数（None = 数えられない形式）
 
 

@@ -131,7 +131,9 @@ class ExcelTest(Base):
         r, md = self.convert("expense-ledger.xlsx")
         self.assertIn("経費精算台帳（2026年4月）\n\n作成: 総務部", md)  # タイトル行は段落
         self.assertIn("| 申請ID | 申請日 | 区分 | 金額/税抜 | 金額/税額 | 金額/税込 | 承認者 |", md)  # 2 段見出し
-        self.assertIn("| A-002 | 2026-04-02 | 宿泊費 | 8000 | 800 | 8800 | 佐藤 |", md)  # 数式の計算結果
+        self.assertIn(
+            "| A-002 | 2026/04/02 | 宿泊費 | 8000 | 800 | 8800 | 佐藤 |", md
+        )  # 数式の計算結果。日付は表示形式
         self.assertIn("### 表2（J4:K7）", md)  # 同じシートの 2 つ目の表
         self.assertIn("※ 税額は 10% 端数切り捨て", md)  # 注記は表の外
         self.assertIn("| 営業部 | 鈴木 | 1 |", md)  # 縦結合を埋める
@@ -146,12 +148,12 @@ class ExcelTest(Base):
         r, md = self.convert("uncalculated.xlsx")
         msgs = [f.message for f in r.findings if f.severity is Severity.WARNING]
         self.assertTrue(any("計算結果が保存されていない" in m for m in msgs))
-        self.assertIn("| A-001 | 2026-04-01 | 交通費 | 1000 |  |  | 佐藤 |", md)
+        self.assertIn("| A-001 | 2026/04/01 | 交通費 | 1000 |  |  | 佐藤 |", md)
 
     @unittest.skipUnless(find_soffice(), "LibreOffice not installed")
     def test_recalc(self):
         r, md = self.convert("uncalculated.xlsx", recalc=True)
-        self.assertIn("| A-001 | 2026-04-01 | 交通費 | 1000 | 100 | 1100 | 佐藤 |", md)
+        self.assertIn("| A-001 | 2026/04/01 | 交通費 | 1000 | 100 | 1100 | 佐藤 |", md)
         self.assertTrue(md.startswith("# uncalculated\n"))
 
     def test_header_row_override(self):

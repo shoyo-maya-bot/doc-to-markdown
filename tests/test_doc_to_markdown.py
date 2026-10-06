@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import io
 import json
 import os
@@ -16,10 +17,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import openpyxl
 from devtools_common.report import Severity
 
 from doc_to_markdown import cli, lossaudit
-from doc_to_markdown.adapters import drawio_adapter
+from doc_to_markdown.adapters import drawio_adapter, xlsx_adapter
 from doc_to_markdown.converter import convert_file, find_soffice
 from doc_to_markdown.model import Heading, ListItem, Paragraph, SourceStats, Table
 from doc_to_markdown.normalize import normalize
@@ -170,6 +172,132 @@ class LossAuditTest(unittest.TestCase):
     def test_markup_not_counted_as_text(self):
         st = lossaudit.markdown_stats("## 見出し\n\n- **太字**\n\n![a](b.png)\n\n<!-- page 1 -->\n")
         self.assertEqual((st.headings, st.list_items, st.images, st.text_chars), (1, 1, 1, 5))
+
+
+class XlsxNumberFormatTest(Tmp):
+    """セルの表示形式（ゼロ埋め・桁区切り・日付書式 等）を Excel の見た目どおりに出す."""
+
+    def test_render_number_formats(self):
+        cases = [
+            (1, "000", "001"),
+            (42, "0000", "0042"),
+            (12345, "000", "12345"),
+            (1.5, "0.00", "1.50"),
+            (2.345, "0.00", "2.35"),  # 四捨五入（Excel と同じく 0.5 は切り上げ）
+            (-2.345, "0.00", "-2.35"),
+            (1234567, "#,##0", "1,234,567"),
+            (1234.5, "#,##0.00", "1,234.50"),
+            (0.1234, "0.0%", "12.3%"),
+            (0.5, "0%", "50%"),
+            (7, "@", "7"),
+            ("007", "@", "007"),
+            (1234.5, "General", "1234.5"),
+            (3.0, "General", "3"),
+            (-1500, "#,##0;[Red]-#,##0", "-1,500"),
+            (-1500, "#,##0_);(#,##0)", "(1,500)"),
+            (0, '#,##0;-#,##0;"-"', "-"),
+            (1500, '"¥"#,##0', "¥1,500"),
+            (1500, "[$¥-411]#,##0", "¥1,500"),
+            (1500, '#,##0"円"', "1,500円"),
+            (0.25, "#.##", ".25"),
+            (2, "0.0#", "2.0"),
+            (1234567, "000-0000", "123-4567"),
+            (1500000, "#,##0,", "1,500"),
+            (0.5, "0.0_ ", "0.5"),
+        ]
+        for v, fmt, want in cases:
+            with self.subTest(fmt=fmt, v=v):
+                self.assertEqual(xlsx_adapter.render_value(v, fmt), (want, True))
+
+    def test_render_date_formats(self):
+        d = dt.datetime(2026, 4, 5, 9, 7, 3)
+        cases = [
+            ("yyyy/mm/dd", "2026/04/05"),
+            ("yyyy-mm-dd", "2026-04-05"),
+            ("yyyy/m/d", "2026/4/5"),
+            ("m/d", "4/5"),
+            ('yyyy"年"m"月"d"日"', "2026年4月5日"),
+            ("yyyy年m月d日", "2026年4月5日"),
+            ("h:mm", "9:07"),
+            ("hh:mm:ss", "09:07:03"),
+            ("yyyy/mm/dd hh:mm", "2026/04/05 09:07"),
+            ("m月d日(aaa)", "4月5日(日)"),
+            ("h:mm AM/PM", "9:07 AM"),
+            ('[$-ja-JP]ggge"年"m"月"d"日"', "令和8年4月5日"),
+            ("[$-411]ge.m.d", "R8.4.5"),
+        ]
+        for fmt, want in cases:
+            with self.subTest(fmt=fmt):
+                self.assertEqual(xlsx_adapter.render_value(d, fmt), (want, True))
+        self.assertEqual(xlsx_adapter.render_value(dt.time(13, 5), "h:mm"), ("13:05", True))
+        self.assertEqual(xlsx_adapter.render_value(dt.datetime(2019, 4, 30), "ggge年"), ("平成31年", True))
+        gannen = '[$-ja-JP-x-gannen]ggge"年"'
+        self.assertEqual(xlsx_adapter.render_value(dt.datetime(2019, 5, 3), gannen), ("令和元年", True))
+        self.assertEqual(xlsx_adapter.render_value("山田", '@" 様"'), ("山田 様", True))
+        # 地域設定に従う既定の日付（組み込み書式 14）は従来どおり ISO 形式
+        self.assertEqual(xlsx_adapter.render_value(dt.datetime(2026, 4, 5), "mm-dd-yy"), ("2026-04-05", True))
+
+    def test_unsupported_formats_fall_back(self):
+        for v, fmt, want in [
+            (12345.678, "0.00E+00", "12345.678"),
+            (0.5, "# ?/?", "0.5"),
+            (150, '[>=100]"多";"少"', "150"),
+            (dt.datetime(2026, 4, 5), "[$-F800]dddd, mmmm dd, yyyy", "2026-04-05"),
+        ]:
+            with self.subTest(fmt=fmt):
+                self.assertEqual(xlsx_adapter.render_value(v, fmt), (want, False))
+
+    def _book(self, cells: dict[str, tuple[object, str]]) -> Path:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "コード表"
+        ws["A1"], ws["B1"], ws["C1"], ws["D1"] = "コード", "名称", "金額", "登録日"
+        for ref, (v, fmt) in cells.items():
+            ws[ref] = v
+            ws[ref].number_format = fmt
+        path = self.tmp / "codes.xlsx"
+        wb.save(path)
+        return path
+
+    def test_workbook_cells_follow_number_format(self):
+        path = self._book(
+            {
+                "A2": (1, "000"),
+                "B2": ("本社", "@"),
+                "C2": (1234567, "#,##0"),
+                "D2": (dt.datetime(2026, 4, 5), "yyyy/mm/dd"),
+                "A3": (12, "000"),
+                "B3": ("支社", "General"),
+                "C3": (0.125, "0.0%"),
+                "D3": (dt.datetime(2026, 4, 5), 'yyyy"年"m"月"d"日"'),
+            }
+        )
+        r = convert_file(path, self.tmp / "out")
+        md = r.output.read_text(encoding="utf-8")
+        self.assertIn("| 001 | 本社 | 1,234,567 | 2026/04/05 |", md)
+        self.assertIn("| 012 | 支社 | 12.5% | 2026年4月5日 |", md)
+        self.assertEqual([f for f in r.findings if f.severity is Severity.WARNING], [])
+
+    def test_unsupported_format_reported_as_loss(self):
+        path = self._book(
+            {
+                "A2": (1, "000"),
+                "C2": (12345.678, "0.00E+00"),
+                "A3": (2, "000"),
+                "C3": (99.5, "0.00E+00"),
+            }
+        )
+        r = convert_file(path, self.tmp / "out")
+        md = r.output.read_text(encoding="utf-8")
+        self.assertIn("| 001 |  | 12345.678 |", md)  # 再現できない書式は従来どおりの値
+        losses = [f for f in r.findings if f.rule_id == "loss.number_format"]
+        self.assertEqual(len(losses), 1)  # 同じ書式はまとめて 1 件
+        f = losses[0]
+        self.assertIs(f.severity, Severity.WARNING)
+        self.assertEqual(f.location, "codes.xlsx")
+        self.assertIn("0.00E+00", f.message)
+        self.assertIn("コード表!C2", f.message)
+        self.assertIn("コード表!C3", f.message)
 
 
 class CliTest(Tmp):

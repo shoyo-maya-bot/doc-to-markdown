@@ -149,6 +149,9 @@ def convert_file(
 
     findings += lossaudit.audit(doc.stats, out, location=src.name, raw_text_chars=doc.raw_text_chars)
     findings += [Finding("convert.warning", Severity.WARNING, w, location=src.name) for w in doc.warnings]
+    findings += [
+        Finding(rule, Severity.WARNING, msg, location=src.name, suggestion=hint) for rule, msg, hint in doc.losses
+    ]
     findings += [Finding("convert.note", Severity.INFO, n, location=src.name) for n in doc.notes]
     log.info("converted %s -> %s (%d chars, %d assets)", src.name, output.name, doc.stats.text_chars, assets.count)
     return Result(src, output, doc.stats, assets.count, use_pdf, findings)
