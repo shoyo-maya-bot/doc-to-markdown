@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Excel の読み取りの共通部分（表示形式の反映 `render_value`、結合セルの索引、複数段の見出しの判定）を
+  devtools-common の `devtools_common.excel` に移した（design-diff と同じ規則で読む）。
+  `adapters/xlsx_numfmt.py` は削除し、そのテストも devtools-common へ移した。devtools-common は `[excel]` extra 付きで固定。
+  出力は変わらない（ゴールデンファイルは同一）。見出しの段数の判定は、縦結合の下の行が数値だけのときは子見出しとみなさない
+  （3 段に縦結合した見出しで、3 段目がデータの表を 3 段の見出しと誤認していた）
+
 ### Fixed
 
 - Excel: セルの表示形式を無視していた問題を修正。`000` の表示形式で 1 と入ったコードが `1` になる、

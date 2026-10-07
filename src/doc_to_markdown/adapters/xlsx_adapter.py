@@ -12,7 +12,7 @@
 | 表の下の注記（※…） | 表の後ろに段落として出す |
 | 非表示の行・列・シート | 既定は出力して注記。`--skip-hidden` で除外 |
 | 数式 | 保存されている計算結果を出す。結果が無いブックは警告（`--recalc` で LibreOffice 再計算） |
-| セルの表示形式 | ゼロ埋め・桁区切り・小数桁・%・通貨・日付・和暦を表示形式どおりに出す（xlsx_numfmt） |
+| セルの表示形式 | ゼロ埋め・桁区切り・小数桁・%・通貨・日付・和暦を表示形式どおりに出す（devtools_common.excel） |
 | 再現できない表示形式 | 書式なしの値を出し、`loss.number_format` で報告 |
 | 大きなブック | 20 万セル（`--max-cells`）を超えると省メモリ読み込み（1 シート = 1 表、結合の解決なし） |
 """
@@ -27,16 +27,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import openpyxl
+from devtools_common.excel import MergeMap, header_depth, header_names, looks_numeric, render_value
 from devtools_common.tempfiles import secure_tempdir
 from lxml import etree
 from openpyxl.utils import get_column_letter
 
 from ..assets import AssetWriter
 from ..model import Block, Document, Heading, Options, Paragraph, StreamTable, Table, count_chars
-from .xlsx_numfmt import render_value
 
 NOTE_PREFIXES = ("※", "注", "備考", "＊", "*")
-MAX_HEADER_DEPTH = 3
 
 
 def format_value(v, number_format: str = "") -> str:
@@ -46,24 +45,12 @@ def format_value(v, number_format: str = "") -> str:
 # ---------------------------------------------------------------------------
 # シートの格子
 # ---------------------------------------------------------------------------
-@dataclass
-class Merge:
-    r0: int
-    c0: int
-    r1: int
-    c1: int
-
-    @property
-    def width(self) -> int:
-        return self.c1 - self.c0 + 1
-
-
 class Grid:
     """1 シート分のセル値（文字列）と結合情報. 行・列は 1 始まり."""
 
     def __init__(self, ws, opts: Options):
         self.values: dict[tuple[int, int], str] = {}
-        self.merge_at: dict[tuple[int, int], Merge] = {}  # 結合範囲内の全セル → 結合
+        self.merges = MergeMap.from_worksheet(ws)  # 結合範囲内の全セル → 結合
         self.hidden_rows: set[int] = set()
         self.hidden_cols: set[int] = set()
         for r, dim in ws.row_dimensions.items():
@@ -83,11 +70,6 @@ class Grid:
                     self.unsupported_formats.setdefault(c.number_format, []).append((c.row, c.column))
                 if text.strip():
                     self.values[(c.row, c.column)] = text
-        for rng in ws.merged_cells.ranges:
-            m = Merge(rng.min_row, rng.min_col, rng.max_row, rng.max_col)
-            for r in range(m.r0, m.r1 + 1):
-                for c in range(m.c0, m.c1 + 1):
-                    self.merge_at[(r, c)] = m
         self.skip_hidden = opts.skip_hidden
 
     def visible(self, r: int, c: int) -> bool:
@@ -98,13 +80,13 @@ class Grid:
         return "".join(v for (r, c), v in self.values.items() if self.visible(r, c))
 
     def occupied(self, r: int, c: int) -> bool:
-        m = self.merge_at.get((r, c))
+        m = self.merges.get(r, c)
         if m:
             return (m.r0, m.c0) in self.values
         return (r, c) in self.values
 
     def value(self, r: int, c: int, *, fill_merged: bool) -> str:
-        m = self.merge_at.get((r, c))
+        m = self.merges.get(r, c)
         if m and fill_merged:
             return self.values.get((m.r0, m.c0), "")
         if m and (r, c) != (m.r0, m.c0):
@@ -112,7 +94,7 @@ class Grid:
         return self.values.get((r, c), "")
 
     def bounds(self) -> tuple[int, int, int, int] | None:
-        cells = list(self.values) + [(m.r1, m.c1) for m in self.merge_at.values() if (m.r0, m.c0) in self.values]
+        cells = list(self.values) + [(m.r1, m.c1) for m in self.merges if m.anchor in self.values]
         if not cells:
             return None
         return min(r for r, _ in cells), min(c for _, c in cells), max(r for r, _ in cells), max(c for _, c in cells)
@@ -166,7 +148,7 @@ def _logical_cells(g: Grid, r: int, c0: int, c1: int) -> list[str]:
     """行 r の、結合を 1 つと数えた値の一覧（空は除く）."""
     out, seen = [], set()
     for c in range(c0, c1 + 1):
-        m = g.merge_at.get((r, c))
+        m = g.merges.get(r, c)
         key = (m.r0, m.c0) if m else (r, c)
         if key in seen:
             continue
@@ -177,59 +159,24 @@ def _logical_cells(g: Grid, r: int, c0: int, c1: int) -> list[str]:
     return out
 
 
-def _is_number(s: str) -> bool:
-    try:
-        # 表示形式で付いた桁区切り・%・通貨記号・括弧（会計の負数）は数値の一部とみなす
-        float(s.replace(",", "").strip().strip("()¥￥$円%").strip())
-        return True
-    except ValueError:
-        return False
-
-
 def detect_header_row(g: Grid, r0: int, c0: int, r1: int, c1: int) -> int | None:
     width = c1 - c0 + 1
     need = max(2, math.ceil(width * 0.5))
     for r in range(r0, min(r1, r0 + 20) + 1):
         vals = _logical_cells(g, r, c0, c1)
         filled = sum(1 for c in range(c0, c1 + 1) if g.occupied(r, c))
-        if filled >= need and len(vals) >= 2 and sum(1 for v in vals if not _is_number(v)) >= len(vals) * 0.7:
+        if filled >= need and len(vals) >= 2 and sum(1 for v in vals if not looks_numeric(v)) >= len(vals) * 0.7:
             return r
     return None
 
 
-def header_depth(g: Grid, h: int, c0: int, c1: int, r1: int) -> int:
-    """見出しが何行あるか: h 行目の結合が下の行まで伸びている、または横結合の下に子見出しがある."""
-    depth = 1
-
-    def looks_like_subheader(r: int) -> bool:
-        """r 行目の、上からの結合で覆われていないセルがすべて文字（数値でない）で、1 つ以上ある."""
-        free = [g.values.get((r, c), "") for c in range(c0, c1 + 1) if not ((m := g.merge_at.get((r, c))) and m.r0 < r)]
-        filled = [v for v in free if v]
-        return bool(filled) and not any(_is_number(v) for v in filled)
-
-    for c in range(c0, c1 + 1):
-        m = g.merge_at.get((h, c))
-        if not m or m.r0 != h:
-            continue
-        if m.r1 > h and looks_like_subheader(h + 1):  # 縦結合（A4:A5）の横に子見出しがある
-            depth = max(depth, m.r1 - h + 1)
-        elif m.width > 1 and h + 1 <= r1:  # 横結合の下に子見出しがあるか
-            below = [g.values.get((h + 1, cc), "") for cc in range(m.c0, m.c1 + 1)]
-            if all(below) and not any(_is_number(b) for b in below):
-                depth = max(depth, 2)
-    return min(depth, MAX_HEADER_DEPTH, r1 - h + 1)
+def _header_depth(g: Grid, h: int, c0: int, c1: int, r1: int) -> int:
+    """見出しが何行あるか（結合が下の行まで伸びている、横結合の下に子見出しがある. devtools_common.excel）."""
+    return header_depth(g.merges, lambda r, c: g.values.get((r, c), ""), h, first_col=c0, last_col=c1, last_row=r1)
 
 
-def header_names(g: Grid, h: int, depth: int, c0: int, c1: int) -> list[str]:
-    names = []
-    for c in range(c0, c1 + 1):
-        parts: list[str] = []
-        for r in range(h, h + depth):
-            v = g.value(r, c, fill_merged=True).replace("\n", " ")
-            if v and (not parts or parts[-1] != v):
-                parts.append(v)
-        names.append("/".join(parts))
-    return names
+def _header_names(g: Grid, h: int, depth: int, c0: int, c1: int) -> list[str]:
+    return header_names(lambda r, c: g.value(r, c, fill_merged=True).replace("\n", " "), h, depth, range(c0, c1 + 1))
 
 
 @dataclass
@@ -281,8 +228,8 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
                 line = " / ".join(vals)
                 texts.append(line)
                 blocks.append(Paragraph(line))
-        depth = header_depth(g, h, c0, c1, r1)
-        header = header_names(g, h, depth, c0, c1)
+        depth = _header_depth(g, h, c0, c1, r1)
+        header = _header_names(g, h, depth, c0, c1)
         texts += [v for r in range(h, h + depth) for v in _logical_cells(g, r, c0, c1)]
         body_rows: list[list[str]] = []
         notes: list[str] = []
@@ -300,7 +247,7 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
                 continue
             row = []
             for c in range(c0, c1 + 1):
-                m = g.merge_at.get((r, c))
+                m = g.merges.get(r, c)
                 vertical = m is not None and m.r1 > m.r0 and m.c0 == c and (r, c) != (m.r0, m.c0)
                 v = g.value(r, c, fill_merged=vertical)
                 if vertical and v:
@@ -345,7 +292,7 @@ def _stream_sheet(ws, doc: Document) -> Iterator[Block]:
         texts = [c for c in r if c.strip()]
         if (
             len(texts) >= max(2, math.ceil(width * 0.5))
-            and sum(1 for c in texts if not _is_number(c)) >= len(texts) * 0.7
+            and sum(1 for c in texts if not looks_numeric(c)) >= len(texts) * 0.7
         ):
             header_idx = i
             break

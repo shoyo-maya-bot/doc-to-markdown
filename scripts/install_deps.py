@@ -3,7 +3,8 @@
     python scripts/install_deps.py [--dev]
 
 - 隣のフォルダに devtools-common があれば、それを editable で入れ、pyproject.toml の
-  `devtools-common @ git+…` 依存の代わりに使う（GitHub の認証が無くてもセットアップできる）
+  `devtools-common @ git+…` 依存の代わりに使う（GitHub の認証が無くてもセットアップできる）.
+  `devtools-common[excel] @ git+…` のような extra も引き継ぐ
 - 無ければ通常どおり pip install（devtools-common は GitHub から取得）
 """
 
@@ -49,8 +50,12 @@ def main() -> int:
     is_common = REPO.name == COMMON_NAME or (REPO / "src" / "devtools_common").is_dir()
     if not is_common and (COMMON / "pyproject.toml").is_file():
         print(f"== 隣の {COMMON_NAME} を使います: {COMMON}")
-        pip("-e", str(COMMON))
-        third_party = [d for d in dependencies(extras) if not d.replace("_", "-").startswith(COMMON_NAME)]
+        deps = dependencies(extras)
+        common = [d for d in deps if d.replace("_", "-").startswith(COMMON_NAME)]
+        # devtools-common[excel] のような extra はそのまま引き継ぐ
+        m = re.match(r"[\w.-]+\s*(\[[^\]]*\])", common[0]) if common else None
+        pip("-e", str(COMMON) + (m.group(1).replace(" ", "") if m else ""))
+        third_party = [d for d in deps if d not in common]
         if third_party:
             pip(*third_party)
         pip("--no-deps", "-e", str(REPO))
