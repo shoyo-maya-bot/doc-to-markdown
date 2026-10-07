@@ -11,6 +11,8 @@ import json
 import os
 import re
 import shutil
+import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,32 +43,76 @@ class Result:
 
 
 def _write(doc: Document, output: Path, header: str = "") -> lossaudit.OutputStats:
+    """同じフォルダの一時ファイルに書いてから置き換える（途中で失敗しても途中までの .md を残さない）."""
+    fd, tmp_name = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            stats = _write_to(doc, f, header)
+        os.replace(tmp, output)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return stats
+
+
+ZIP_RATIO_MIN_BYTES = 1 << 20  # これより小さいファイルは圧縮率を見ない（小さな XML はよく縮む）
+
+
+def check_zip_limits(src: Path, opts: Options) -> None:
+    """Office 形式（zip）の展開後の合計サイズと圧縮率を、展開する前に調べる（zip 爆弾対策）.
+
+    zip のヘッダーに書かれたサイズで判定する（実際の展開は zipfile がヘッダーのサイズで打ち切る）。
+    上限を超えたら UsageError（終了コード 2）。zip でないファイルは各アダプタのエラーに任せる。
+    """
+    if not zipfile.is_zipfile(src):
+        return
+    limit = opts.max_unzipped_mb * 1024 * 1024
+    total = 0
+    with zipfile.ZipFile(src) as z:
+        for info in z.infolist():
+            total += info.file_size
+            if total > limit:
+                raise UsageError(
+                    f"{src.name} は展開後のサイズが上限 {opts.max_unzipped_mb:,} MB を超えるため変換しません"
+                    "（壊れたファイルか zip 爆弾の疑い。正しいファイルなら --max-unzipped-mb で上限を上げてください）"
+                )
+            if info.file_size >= ZIP_RATIO_MIN_BYTES:
+                ratio = info.file_size / max(info.compress_size, 1)
+                if ratio > opts.max_zip_ratio:
+                    raise UsageError(
+                        f"{src.name} の {info.filename} は圧縮率が {ratio:,.0f} 倍で"
+                        f"上限 {opts.max_zip_ratio:,} 倍を超えるため変換しません"
+                        "（zip 爆弾の疑い。正しいファイルなら --max-zip-ratio で上限を上げてください）"
+                    )
+
+
+def _write_to(doc: Document, f, header: str) -> lossaudit.OutputStats:
     stats = lossaudit.OutputStats()
     first = True
-    with output.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(header)  # Front Matter（ロス検知の統計には含めない）
-        for b in _stream_aware(normalize(doc.blocks)):
-            if isinstance(b, StreamTable):  # 大きな表は 1 行ずつ書く
-                if not first:
-                    f.write("\n\n")
-                for i, line in enumerate(iter_stream_table(b)):
-                    f.write(("\n" if i else "") + line)
-                    if i == 1:  # 区切り行: 表 1 つ + 見出し行 1 行
-                        stats.structure.tables += 1
-                        stats.structure.table_rows += 1
-                        continue
-                    if i > 1:
-                        stats.structure.table_rows += 1
-                    stats.structure.text_chars += count_chars(lossaudit.plain_text(line))
-                first = False
-                continue
-            chunk, blocks = b
+    f.write(header)  # Front Matter（ロス検知の統計には含めない）
+    for b in _stream_aware(normalize(doc.blocks)):
+        if isinstance(b, StreamTable):  # 大きな表は 1 行ずつ書く
             if not first:
                 f.write("\n\n")
-            f.write(chunk)
+            for i, line in enumerate(iter_stream_table(b)):
+                f.write(("\n" if i else "") + line)
+                if i == 1:  # 区切り行: 表 1 つ + 見出し行 1 行
+                    stats.structure.tables += 1
+                    stats.structure.table_rows += 1
+                    continue
+                if i > 1:
+                    stats.structure.table_rows += 1
+                stats.structure.text_chars += count_chars(lossaudit.plain_text(line))
             first = False
-            stats.add(chunk, synthetic=all(getattr(x, "synthetic", False) for x in blocks))
-        f.write("\n")
+            continue
+        chunk, blocks = b
+        if not first:
+            f.write("\n\n")
+        f.write(chunk)
+        first = False
+        stats.add(chunk, synthetic=all(getattr(x, "synthetic", False) for x in blocks))
+    f.write("\n")
     return stats
 
 
@@ -111,6 +157,8 @@ def convert_file(
     if suffix not in SUPPORTED:
         raise UsageError(f"未対応の形式です: {src.name}（対応: {', '.join(sorted(SUPPORTED))}）")
     use_pdf = suffix in VIA_PDF_ONLY or (opts.via_pdf and suffix in OFFICE)
+    if suffix in OFFICE:
+        check_zip_limits(src, opts)  # 何かを書き出す前に止める
     stem = src.stem
     name = name or stem
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -22,12 +22,16 @@ class Heading:
     level: int
     text: str
     synthetic: bool = False  # 変換側が付け足した見出し（ファイル名・区分名など）。ロス検知の対象外
+    # text が変換側の書いた Markdown 記法（太字・リンク・脚注）を含む（Word 等）。
+    # False（既定）は素の文字列として、描画で `\` `|` `<` 等をすべてエスケープする
+    markup: bool = False
 
 
 @dataclass
 class Paragraph:
     text: str
     synthetic: bool = False
+    markup: bool = False  # Heading.markup と同じ
 
 
 @dataclass
@@ -129,6 +133,9 @@ class Options:
     # これを超えるセル数の xlsx は省メモリ読み込み（セル結合・複数表・非表示の判定なし）。
     # 通常読み込みはセル 100 万個で約 800MB 使うため、既定は 20 万セル（約 150MB）
     xlsx_full_load_max_cells: int = 200_000
+    # Office 形式（zip）の展開の上限（zip 爆弾対策）. 超えたら変換せずに止める（終了コード 2）
+    max_unzipped_mb: int = 1024  # 展開後の合計サイズ（MB）
+    max_zip_ratio: int = 500  # 1 MB 以上のファイルの圧縮率（展開後 / 圧縮後）
     # PDF
     ocr: str = "auto"  # auto = 文字の無いページだけ / always / never
     ocr_lang: str = "jpn+eng"

@@ -106,6 +106,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=200_000,
         help="これを超えるセル数のブックは省メモリ読み込み（結合・複数表の判定なし。既定 200000）",
     )
+    g.add_argument(
+        "--max-unzipped-mb",
+        type=int,
+        default=1024,
+        help="Office 形式（zip）の展開後の合計サイズの上限 MB。超えたら変換しない（終了コード 2。既定 1024）",
+    )
+    g.add_argument(
+        "--max-zip-ratio",
+        type=int,
+        default=500,
+        help="Office 形式の中の 1MB 以上のファイルの圧縮率の上限。超えたら変換しない（終了コード 2。既定 500）",
+    )
 
     d = p.add_argument_group("PDF")
     d.add_argument(
@@ -130,6 +142,8 @@ def options_from_args(args: argparse.Namespace) -> Options:
         skip_hidden=args.skip_hidden,
         recalc=args.recalc,
         xlsx_full_load_max_cells=args.max_cells,
+        max_unzipped_mb=args.max_unzipped_mb,
+        max_zip_ratio=args.max_zip_ratio,
         ocr=args.ocr,
         ocr_lang=args.ocr_lang,
         remove_running_headers=not args.keep_running_headers,

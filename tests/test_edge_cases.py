@@ -1,0 +1,323 @@
+"""採点で見つかった取りこぼし・誤変換の回帰テスト（意地悪な入力）.
+
+- 年度・数値だけの見出し行、1 列だけの表、表を段落に落としたときの警告
+- `[h]:mm` などの経過時間の表示形式
+- 段落・見出しの Markdown 記法と HTML のエスケープ
+- 大きなブックの省メモリ読み込みでも表示形式を反映し、warning で知らせる
+- 出力の途中で失敗しても途中までの .md を残さない
+- zip の展開サイズ・圧縮率の上限（zip 爆弾）
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import shutil
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest import mock
+
+import openpyxl
+from devtools_common.report import Severity
+from openpyxl.styles import Font
+
+from doc_to_markdown import cli, converter, lossaudit
+from doc_to_markdown.adapters import drawio_adapter
+from doc_to_markdown.converter import convert_file
+from doc_to_markdown.model import Heading, Options, Paragraph
+from doc_to_markdown.render import render
+
+
+def run_cli(*args: str) -> tuple[int, str, str]:
+    from devtools_common.cli import run_main
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = run_main(cli.main, list(args))
+    return rc, out.getvalue(), err.getvalue()
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        p = mock.patch.object(drawio_adapter, "find_drawio_cli", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def book(self, rows: list[list[object]], name: str = "book.xlsx", *, bold_rows=(), formats=None) -> Path:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        for r, row in enumerate(rows, start=1):
+            for c, v in enumerate(row, start=1):
+                if v is None:
+                    continue
+                cell = ws.cell(r, c, v)
+                if r in bold_rows:
+                    cell.font = Font(bold=True)
+        for ref, fmt in (formats or {}).items():
+            ws[ref].number_format = fmt
+        path = self.tmp / name
+        wb.save(path)
+        return path
+
+    def convert(self, path: Path, **opts):
+        r = convert_file(path, self.tmp / "out", options=Options(**opts))
+        return r, r.output.read_text(encoding="utf-8")
+
+    @staticmethod
+    def rules(r, severity=None) -> list[str]:
+        return [f.rule_id for f in r.findings if severity is None or f.severity is severity]
+
+
+class YearHeaderTest(Base):
+    """見出しが `項目 / 2024 / 2025 / 2026` の表（採点で再現した入力）."""
+
+    ROWS = [
+        ["項目", 2024, 2025, 2026],
+        ["売上", 100, 120, 150],
+        ["費用", 80, 90, 100],
+    ]
+
+    def test_year_header_is_table(self):
+        r, md = self.convert(self.book(self.ROWS))
+        self.assertIn("| 項目 | 2024 | 2025 | 2026 |\n| --- | --- | --- | --- |\n| 売上 | 100 | 120 | 150 |", md)
+        self.assertNotIn("loss.tables", self.rules(r))
+        self.assertNotIn("loss.table_as_paragraph", self.rules(r))
+
+    def test_year_header_with_title_above(self):
+        r, md = self.convert(self.book([["年度別の推移"], [], *self.ROWS]))
+        self.assertIn("年度別の推移", md)
+        self.assertIn("| 項目 | 2024 | 2025 | 2026 |", md)
+
+    def test_fiscal_years_as_text(self):
+        rows = [["項目", "2024", "2025"], ["売上", 1, 2], ["費用", 3, 4]]
+        _, md = self.convert(self.book(rows))
+        self.assertIn("| 項目 | 2024 | 2025 |\n| --- |", md)
+
+    def test_numeric_header_distinguished_by_bold(self):
+        # 年度でない数値の見出し（等級 1 / 2 / 3）も、見出しだけ太字なら見出しにする
+        rows = [["等級", 1, 2, 3], ["A", 10, 20, 30], ["B", 40, 50, 60]]
+        _, md = self.convert(self.book(rows, bold_rows=(1,)))
+        self.assertIn("| 等級 | 1 | 2 | 3 |\n| --- |", md)
+
+    def test_all_year_header_without_label(self):
+        rows = [[2024, 2025, 2026], [100, 120, 150], [80, 90, 100]]
+        _, md = self.convert(self.book(rows))
+        self.assertIn("| 2024 | 2025 | 2026 |\n| --- | --- | --- |\n| 100 | 120 | 150 |", md)
+
+    def test_streaming_mode_detects_year_header(self):
+        rows = [["メモ"], ["項目", 2024, 2025], ["売上", 1, 2]]
+        _, md = self.convert(self.book(rows), xlsx_full_load_max_cells=1)
+        self.assertIn("メモ\n\n| 項目 | 2024 | 2025 |", md)
+
+
+class SingleColumnTableTest(Base):
+    def test_single_column_with_bold_header(self):
+        rows = [["社員番号"], ["E001"], ["E002"], ["E003"]]
+        r, md = self.convert(self.book(rows, bold_rows=(1,)))
+        self.assertIn("| 社員番号 |\n| --- |\n| E001 |\n| E002 |\n| E003 |", md)
+        self.assertNotIn("loss.table_as_paragraph", self.rules(r))
+
+    def test_single_column_numbers_under_text_header(self):
+        rows = [["数量"], [10], [20], [30]]
+        _, md = self.convert(self.book(rows))
+        self.assertIn("| 数量 |\n| --- |\n| 10 |", md)
+
+    def test_title_and_notes_stay_paragraphs(self):
+        rows = [["経費一覧"], ["作成: 総務部"], ["※ 4 月分"]]
+        r, md = self.convert(self.book(rows, bold_rows=(1,)))
+        self.assertNotIn("| --- |", md)
+        self.assertIn("経費一覧\n\n作成: 総務部", md)
+        self.assertNotIn("loss.table_as_paragraph", self.rules(r))
+
+    def test_table_without_header_warns(self):
+        # 見出しが無い（全部数値）の表は段落になるが、専用の警告を出す
+        rows = [[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]]
+        r, md = self.convert(self.book(rows))
+        self.assertIn("1.5 / 2.5 / 3.5", md)
+        found = [f for f in r.findings if f.rule_id == "loss.table_as_paragraph"]
+        self.assertEqual(len(found), 1)
+        self.assertIs(found[0].severity, Severity.WARNING)
+        self.assertIn("Sheet1!A1:C3", found[0].message)
+        self.assertIn("--header-row", found[0].suggestion)
+
+
+class ElapsedTimeFormatTest(Base):
+    def test_hours_over_24(self):
+        path = self.book(
+            [["作業", "時間", "秒まで", "分"], ["設計", 1.5, 1.5, 0.75]],
+            formats={"B2": "[h]:mm", "C2": "[h]:mm:ss", "D2": "[mm]:ss"},
+        )
+        r, md = self.convert(path)
+        self.assertIn("| 設計 | 36:00 | 36:00:00 | 1080:00 |", md)
+        self.assertNotIn("day", md)
+        self.assertNotIn("loss.number_format", self.rules(r))
+
+    def test_streaming_mode_elapsed(self):
+        path = self.book([["作業", "時間"], ["設計", 1.5]], formats={"B2": "[h]:mm"})
+        _, md = self.convert(path, xlsx_full_load_max_cells=1)
+        self.assertIn("| 設計 | 36:00 |", md)
+
+
+class MarkdownEscapeTest(Base):
+    """セル値・段落が Markdown 記法や HTML として解釈されないこと."""
+
+    NASTY = [
+        "# 大見出し",
+        "## 小見出し",
+        "- 箇条書きではない",
+        "+ これも",
+        "* これも",
+        "1. 番号付きではない",
+        "2) これも",
+        "> 引用ではない",
+        "<!-- 消えてはいけない -->",
+        "<b>タグ</b>",
+        "a | b | c",
+        "C:\\temp\\file",
+        "---",
+        "===",
+        "```",
+        "[1]: http://example.invalid",
+        "&lt;そのまま&gt;",
+    ]
+
+    def test_render_escapes_block_syntax(self):
+        md = render([Paragraph(t) for t in self.NASTY])
+        lines = md.split("\n\n")
+        for src, line in zip(self.NASTY, lines, strict=True):
+            with self.subTest(src=src):
+                self.assertFalse(line.startswith(("#", "-", "+", "* ", ">", "<", "`", "=", "[")), line)
+                self.assertNotRegex(line, r"^\d+[.)] ")
+        self.assertIn("\\# 大見出し", md)
+        self.assertIn("1\\. 番号付きではない", md)
+        self.assertIn("\\<!-- 消えてはいけない -->", md)
+        self.assertIn("a \\| b \\| c", md)
+        self.assertIn("C:\\\\temp\\\\file", md)
+        self.assertIn("\\&lt;そのまま\\&gt;", md)
+
+    def test_every_line_of_paragraph_is_escaped(self):
+        md = render([Paragraph("前置き\n# 見出しにしない\n- 箇条書きにしない\n===")])
+        self.assertEqual(md, "前置き\\\n\\# 見出しにしない\\\n\\- 箇条書きにしない\\\n\\===\n")
+
+    def test_heading_text_is_escaped(self):
+        md = render([Heading(2, "<!-- x --> 見出し #")])
+        self.assertEqual(md, "## \\<!-- x --> 見出し \\#\n")
+
+    def test_markup_paragraph_keeps_inline_markup(self):
+        # Word 由来の段落（太字・リンク・変更履歴）は行頭だけエスケープし、意図した記法は残す
+        md = render([Paragraph("# **太字** [リンク](http://example.invalid) <ins>追加</ins>", markup=True)])
+        self.assertEqual(md, "\\# **太字** [リンク](http://example.invalid) <ins>追加</ins>\n")
+
+    def test_plain_text_counts_escaped_chars(self):
+        md = render([Paragraph(t) for t in self.NASTY])
+        self.assertEqual(
+            lossaudit.markdown_stats(md).text_chars, lossaudit.count_chars("".join(self.NASTY).replace("|", ""))
+        )
+
+    def test_xlsx_cells_with_markdown_syntax(self):
+        rows = [["# 大見出し"], ["<!-- 承認 -->"], ["1. 手順"]]
+        r, md = self.convert(self.book(rows))
+        self.assertIn("\\# 大見出し", md)
+        self.assertIn("\\<!-- 承認 -->", md)
+        self.assertIn("1\\. 手順", md)
+        self.assertNotIn("loss.text", self.rules(r))
+        self.assertNotIn("loss.raw_text", self.rules(r))
+
+    def test_table_cell_html_is_escaped(self):
+        rows = [["区分", "備考"], ["A", "<!-- 消えない -->"], ["B", "x"]]
+        _, md = self.convert(self.book(rows))
+        self.assertIn("| A | \\<!-- 消えない --> |", md)
+
+
+class LargeWorkbookTest(Base):
+    def test_streaming_keeps_number_format_and_warns(self):
+        path = self.book([["コード", "名称"], [1, "本社"], [12, "支社"]], formats={"A2": "000", "A3": "000"})
+        r, md = self.convert(path, xlsx_full_load_max_cells=3)
+        self.assertIn("| 001 | 本社 |", md)
+        self.assertIn("| 012 | 支社 |", md)
+        found = [f for f in r.findings if f.rule_id == "convert.large_workbook"]
+        self.assertEqual(len(found), 1)
+        self.assertIs(found[0].severity, Severity.WARNING)
+        self.assertIn("--max-cells", found[0].suggestion)
+
+    def test_max_cells_option(self):
+        path = self.book([["コード", "名称"], [1, "本社"]])
+        rc, _, _ = run_cli(str(path), "-d", str(self.tmp / "o"), "--max-cells", "2", "--strict")
+        self.assertEqual(rc, 1)  # 省メモリ読み込みは warning
+        rc, _, _ = run_cli(str(path), "-d", str(self.tmp / "o2"), "--max-cells", "100", "--strict")
+        self.assertEqual(rc, 0)
+
+
+class AtomicWriteTest(Base):
+    def test_failure_leaves_no_partial_output(self):
+        path = self.book([["コード", "名称"], ["A", "本社"]])
+        out = self.tmp / "out"
+        out.mkdir()
+        (out / "book.md").write_text("前回の出力\n", encoding="utf-8")
+
+        def boom(blocks):
+            yield from blocks
+            raise RuntimeError("途中で失敗")
+
+        with (
+            mock.patch.object(converter, "normalize", side_effect=lambda b: boom(list(b))),
+            self.assertRaises(RuntimeError),
+        ):
+            convert_file(path, out)
+        self.assertEqual((out / "book.md").read_text(encoding="utf-8"), "前回の出力\n")  # 前回の出力は壊さない
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["book.md"])  # 一時ファイルも残さない
+
+
+class ZipBombTest(Base):
+    def _bomb(self, name: str, size: int) -> Path:
+        src = self.book([["a", "b"], ["1", "2"]], name="src.xlsx")
+        path = self.tmp / name
+        with zipfile.ZipFile(src) as zin, zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                zout.writestr(info, zin.read(info))
+            zout.writestr("xl/media/padding.bin", b"\0" * size)
+        return path
+
+    def test_total_size_limit(self):
+        path = self._bomb("big.xlsx", 3 * 1024 * 1024)
+        with self.assertRaises(converter.UsageError) as cm:
+            convert_file(path, self.tmp / "out", options=Options(max_unzipped_mb=2))
+        self.assertIn("展開後", str(cm.exception))
+        self.assertFalse((self.tmp / "out" / "big.md").exists())
+
+    def test_ratio_limit(self):
+        path = self._bomb("ratio.xlsx", 20 * 1024 * 1024)  # ゼロ埋め 20MB は 1000 倍以上に縮む
+        with self.assertRaises(converter.UsageError) as cm:
+            convert_file(path, self.tmp / "out")
+        self.assertIn("圧縮率", str(cm.exception))
+
+    def test_cli_exit_code(self):
+        path = self._bomb("big.xlsx", 3 * 1024 * 1024)
+        rc, _, err = run_cli(str(path), "-d", str(self.tmp / "out"), "--max-unzipped-mb", "2")
+        self.assertEqual(rc, 2)
+        self.assertIn("展開後", err)
+
+    def test_docx_is_checked_too(self):
+        src = Path(__file__).resolve().parent.parent / "samples" / "expense-claim.docx"
+        path = self.tmp / "claim.docx"
+        with zipfile.ZipFile(src) as zin, zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                zout.writestr(info, zin.read(info))
+            zout.writestr("word/media/padding.bin", b"\0" * (3 * 1024 * 1024))
+        with self.assertRaises(converter.UsageError):
+            convert_file(path, self.tmp / "out", options=Options(max_unzipped_mb=2))
+
+    def test_normal_samples_pass(self):
+        r, _ = self.convert(self.book([["a", "b"], ["1", "2"]]))
+        self.assertTrue(r.output.is_file())
+
+
+if __name__ == "__main__":
+    unittest.main()

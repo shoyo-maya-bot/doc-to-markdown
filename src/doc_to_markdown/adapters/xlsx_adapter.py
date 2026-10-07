@@ -13,17 +13,22 @@
 | 非表示の行・列・シート | 既定は出力して注記。`--skip-hidden` で除外 |
 | 数式 | 保存されている計算結果を出す。結果が無いブックは警告（`--recalc` で LibreOffice 再計算） |
 | セルの表示形式 | ゼロ埋め・桁区切り・小数桁・%・通貨・日付・和暦を表示形式どおりに出す（devtools_common.excel） |
+| 経過時間（`[h]:mm` 等） | `36:00` のように表示どおりに出す（devtools_common.excel が未対応なのでここで補う） |
 | 再現できない表示形式 | 書式なしの値を出し、`loss.number_format` で報告 |
-| 大きなブック | 20 万セル（`--max-cells`）を超えると省メモリ読み込み（1 シート = 1 表、結合の解決なし） |
+| 年度・数値だけの見出し（`項目 / 2024 / 2025`） | 年度の並び・太字・文字列として入力された数値で見出し行と判定 |
+| 1 列だけの表 | 見出しが太字、または本文がすべて数値で 3 行以上なら表 |
+| 見出し行が見つからない表らしい範囲 | 段落として出し、`loss.table_as_paragraph` で報告（`--header-row` で指定できる） |
+| 大きなブック | 20 万セル（`--max-cells`）を超えると省メモリ読み込み（1 シート = 1 表、結合の解決なし）。warning |
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import math
 import re
 import zipfile
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import openpyxl
@@ -39,7 +44,66 @@ NOTE_PREFIXES = ("※", "注", "備考", "＊", "*")
 
 
 def format_value(v, number_format: str = "") -> str:
-    return render_value(v, number_format)[0]
+    return cell_text(v, number_format)[0]
+
+
+def cell_text(v, number_format: str = "") -> tuple[str, bool]:
+    """セルの値を表示形式どおりの文字列にする. 戻り値は (文字列, 再現できたか).
+
+    経過時間（`[h]:mm` 等）は openpyxl が timedelta で返し、devtools_common.excel.render_value は
+    `1 day, 12:00:00` になってしまうので、ここで表示どおりに出す。
+    """
+    if isinstance(v, dt.timedelta):
+        text = render_elapsed(v, number_format)
+        if text is not None:
+            return text, True
+        return render_elapsed(v, "[h]:mm:ss") or str(v), not number_format or number_format.lower() == "general"
+    return render_value(v, number_format)
+
+
+_ELAPSED_TOKEN = re.compile(r'\[(h+|m+|s+)\]|"[^"]*"|\\.|h+|m+|s+|\.0+|[:\s\-/.,]', re.I)
+
+
+def render_elapsed(td: dt.timedelta, number_format: str) -> str | None:
+    """経過時間を `[h]:mm` `[h]:mm:ss` `[mm]:ss` `[h]:mm:ss.00` などの表示形式で出す. 再現できなければ None."""
+    fmt = number_format.split(";")[0]
+    tokens: list[str] = []
+    pos = 0
+    while pos < len(fmt):
+        m = _ELAPSED_TOKEN.match(fmt, pos)
+        if not m:
+            return None
+        tokens.append(m.group(0))
+        pos = m.end()
+    top = next((t[1].lower() for t in tokens if t.startswith("[")), None)
+    if top is None:
+        return None
+    frac = max((len(t) - 1 for t in tokens if t.startswith(".0")), default=0)
+    unit = 10**frac
+    total = round(abs(td.total_seconds()) * unit)  # 表示する最小の桁で丸める
+    whole, part = divmod(total, unit)
+    if top == "h":
+        values = {"h": whole // 3600, "m": whole % 3600 // 60, "s": whole % 60}
+    elif top == "m":
+        values = {"h": 0, "m": whole // 60, "s": whole % 60}
+    else:
+        values = {"h": 0, "m": 0, "s": whole}
+    out = []
+    for t in tokens:
+        low = t.lower()
+        if low.startswith("["):
+            out.append(str(values[low[1]]).zfill(len(low) - 2))
+        elif low[0] in "hms":
+            out.append(str(values[low[0]]).zfill(len(low)))
+        elif low.startswith(".0"):
+            out.append("." + str(part).zfill(frac))
+        elif t.startswith('"'):
+            out.append(t[1:-1])
+        elif t.startswith("\\"):
+            out.append(t[1:])
+        else:
+            out.append(t)
+    return ("-" if td < dt.timedelta(0) else "") + "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -61,15 +125,22 @@ class Grid:
                 self.hidden_cols.update(range(dim.min, dim.max + 1))
         # 再現できなかった表示形式 → そのセル（行, 列）の一覧
         self.unsupported_formats: dict[str, list[tuple[int, int]]] = {}
+        # 見出し行の判定に使う書式・型（数値だけの見出しを、下の行との違いで見分ける）
+        self.bold: set[tuple[int, int]] = set()
+        self.typed_number: set[tuple[int, int]] = set()  # 数値として入力されたセル（文字列の "2024" は含まない）
         for row in ws.iter_rows():
             for c in row:
                 if c.value is None:
                     continue
-                text, faithful = render_value(c.value, c.number_format)
+                text, faithful = cell_text(c.value, c.number_format)
                 if not faithful:
                     self.unsupported_formats.setdefault(c.number_format, []).append((c.row, c.column))
                 if text.strip():
                     self.values[(c.row, c.column)] = text
+                    if c.font is not None and c.font.b:
+                        self.bold.add((c.row, c.column))
+                    if isinstance(c.value, (int, float)) and not isinstance(c.value, bool):
+                        self.typed_number.add((c.row, c.column))
         self.skip_hidden = opts.skip_hidden
 
     def visible(self, r: int, c: int) -> bool:
@@ -144,8 +215,8 @@ def split_regions(g: Grid, r0: int, c0: int, r1: int, c1: int, depth: int = 0) -
     return [(r0, c0, r1, c1)]
 
 
-def _logical_cells(g: Grid, r: int, c0: int, c1: int) -> list[str]:
-    """行 r の、結合を 1 つと数えた値の一覧（空は除く）."""
+def _logical_keys(g: Grid, r: int, c0: int, c1: int) -> list[tuple[tuple[int, int], str]]:
+    """行 r の、結合を 1 つと数えた (値のあるセル, 値) の一覧（空は除く）."""
     out, seen = [], set()
     for c in range(c0, c1 + 1):
         m = g.merges.get(r, c)
@@ -153,21 +224,98 @@ def _logical_cells(g: Grid, r: int, c0: int, c1: int) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
-        v = g.values.get(key, "") if m else g.values.get((r, c), "")
+        v = g.values.get(key, "")
         if v and g.visible(*key):
-            out.append(v)
+            out.append((key, v))
     return out
+
+
+def _logical_cells(g: Grid, r: int, c0: int, c1: int) -> list[str]:
+    """行 r の、結合を 1 つと数えた値の一覧（空は除く）."""
+    return [v for _, v in _logical_keys(g, r, c0, c1)]
+
+
+_YEAR = re.compile(r"^(?:19|20|21)\d\d$")
+
+
+def year_sequence(vals: list[str]) -> bool:
+    """数値に見える値が 2 つ以上あり、すべて年（1900〜2199 の 4 桁）で、増える（減る）一方に並ぶ."""
+    nums = [v.strip() for v in vals if looks_numeric(v)]
+    if len(nums) < 2 or not all(_YEAR.match(v) for v in nums):
+        return False
+    years = [int(v) for v in nums]
+    pairs = list(zip(years, years[1:], strict=False))
+    return all(a < b for a, b in pairs) or all(a > b for a, b in pairs)
+
+
+def mostly_text(vals: list[str]) -> bool:
+    return sum(1 for v in vals if not looks_numeric(v)) >= len(vals) * 0.7
+
+
+def _next_row(g: Grid, r: int, r1: int, c0: int, c1: int) -> int | None:
+    for n in range(r + 1, r1 + 1):
+        if _logical_keys(g, n, c0, c1):
+            return n
+    return None
+
+
+def _differs_from_next(g: Grid, r: int, r1: int, c0: int, c1: int) -> bool:
+    """数値を含む行が、すぐ下の行と見た目・型で区別できる（= 見出し行らしい）."""
+    keys = _logical_keys(g, r, c0, c1)
+    vals = [v for _, v in keys]
+    n = _next_row(g, r, r1, c0, c1)
+    if n is None:
+        return False
+    below = _logical_keys(g, n, c0, c1)
+    if year_sequence(vals) and not year_sequence([v for _, v in below]):
+        return True  # 項目 / 2024 / 2025 / 2026
+    if all(k in g.bold for k, _ in keys) and not any(k in g.bold for k, _ in below):
+        return True  # 見出しだけ太字
+    # 見出しの数値は文字列として入力され、下の行の同じ列は数値
+    numeric_cols = [k[1] for k, v in keys if looks_numeric(v)]
+    below_typed = {k[1] for k in g.typed_number if k[0] == n}
+    return bool(numeric_cols) and all((r, c) not in g.typed_number and c in below_typed for c in numeric_cols)
 
 
 def detect_header_row(g: Grid, r0: int, c0: int, r1: int, c1: int) -> int | None:
     width = c1 - c0 + 1
+    if width == 1:
+        return detect_single_column_header(g, r0, c0, r1)
     need = max(2, math.ceil(width * 0.5))
     for r in range(r0, min(r1, r0 + 20) + 1):
         vals = _logical_cells(g, r, c0, c1)
         filled = sum(1 for c in range(c0, c1 + 1) if g.occupied(r, c))
-        if filled >= need and len(vals) >= 2 and sum(1 for v in vals if not looks_numeric(v)) >= len(vals) * 0.7:
+        if filled >= need and len(vals) >= 2 and (mostly_text(vals) or _differs_from_next(g, r, r1, c0, c1)):
             return r
     return None
+
+
+SINGLE_COLUMN_MIN_BODY = 3  # 1 列の表とみなす本文の最小行数（タイトル・作成者・注記の数行と取り違えない）
+SINGLE_COLUMN_HEADER_MAX = 40  # 見出しにしては長すぎる文（段落）を除く
+
+
+def detect_single_column_header(g: Grid, r0: int, c: int, r1: int) -> int | None:
+    """1 列だけの範囲が表なら見出し行を返す.
+
+    見出しがはっきりしている場合だけ表にする: 先頭行が短い文字列で、本文が 3 行以上あり、
+    (a) 先頭行だけ太字、または (b) 本文がすべて数値。注記（※ 等）で始まる行があれば表にしない。
+    """
+    rows = [(r, g.values.get((r, c), "")) for r in range(r0, r1 + 1) if g.occupied(r, c) and g.visible(r, c)]
+    if len(rows) < 1 + SINGLE_COLUMN_MIN_BODY:
+        return None
+    (h, head), body = rows[0], rows[1:]
+    if not head or looks_numeric(head) or len(head) > SINGLE_COLUMN_HEADER_MAX or "\n" in head:
+        return None
+    if any(v.lstrip().startswith(NOTE_PREFIXES) for _, v in rows):
+        return None
+    bold_header = (h, c) in g.bold and not any((r, c) in g.bold for r, _ in body)
+    numeric_body = all(looks_numeric(v) for _, v in body)
+    return h if bold_header or numeric_body else None
+
+
+def looks_like_table(g: Grid, r0: int, c0: int, r1: int, c1: int) -> bool:
+    """見出し行が見つからなかった範囲が、表らしい（2 つ以上の値が並ぶ行が 2 行以上ある）か."""
+    return sum(1 for r in range(r0, r1 + 1) if len(_logical_cells(g, r, c0, c1)) >= 2) >= 2
 
 
 def _header_depth(g: Grid, h: int, c0: int, c1: int, r1: int) -> int:
@@ -186,6 +334,8 @@ class SheetResult:
     rows: int
     text: str
     filled: int
+    # 表らしいのに見出し行が見つからず段落にした範囲（A1:C3 形式）
+    flattened: list[str] = field(default_factory=list)
 
 
 def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
@@ -203,14 +353,17 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
         elif forced:
             h = None
         else:
-            h = detect_header_row(g, r0, c0, r1, c1) if (c1 > c0) else None
+            h = detect_header_row(g, r0, c0, r1, c1)
         table_regions.append((reg, h))
     n_tables = sum(1 for _, h in table_regions if h is not None)
 
     count_tables = rows_total = filled = 0
     texts: list[str] = []
+    flattened: list[str] = []
     for (r0, c0, r1, c1), h in table_regions:
         if h is None:  # 表でない範囲（タイトル・作成者・注記）
+            if looks_like_table(g, r0, c0, r1, c1):
+                flattened.append(f"{get_column_letter(c0)}{r0}:{get_column_letter(c1)}{r1}")
             for r in range(r0, r1 + 1):
                 if opts.skip_hidden and r in g.hidden_rows:
                     continue
@@ -268,17 +421,22 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
         for n in notes:
             texts.append(n)
             blocks.append(Paragraph(n))
-    return SheetResult(blocks, count_tables, rows_total, "".join(texts), filled)
+    return SheetResult(blocks, count_tables, rows_total, "".join(texts), filled, flattened)
 
 
 # ---------------------------------------------------------------------------
 # 省メモリ（大きなブック）
 # ---------------------------------------------------------------------------
+def _row_texts(row) -> list[str]:
+    """省メモリ読み込みの 1 行（ReadOnlyCell / EmptyCell）を表示形式どおりの文字列にする."""
+    return [format_value(c.value, getattr(c, "number_format", None) or "") for c in row]
+
+
 def _stream_sheet(ws, doc: Document) -> Iterator[Block]:
-    it = ws.iter_rows(values_only=True)
+    it = ws.iter_rows()
     head: list[list[str]] = []
-    for values in it:
-        cells = [format_value(v) for v in values]
+    for row in it:
+        cells = _row_texts(row)
         if any(c.strip() for c in cells):
             head.append(cells)
             if len(head) >= 20:
@@ -290,9 +448,9 @@ def _stream_sheet(ws, doc: Document) -> Iterator[Block]:
     header_idx = 0
     for i, r in enumerate(head):
         texts = [c for c in r if c.strip()]
-        if (
-            len(texts) >= max(2, math.ceil(width * 0.5))
-            and sum(1 for c in texts if not looks_numeric(c)) >= len(texts) * 0.7
+        below = [c for c in head[i + 1] if c.strip()] if i + 1 < len(head) else []
+        if len(texts) >= max(2, math.ceil(width * 0.5)) and (
+            mostly_text(texts) or (year_sequence(texts) and not year_sequence(below))
         ):
             header_idx = i
             break
@@ -308,8 +466,8 @@ def _stream_sheet(ws, doc: Document) -> Iterator[Block]:
             st.table_rows += 1
             st.add_text("".join(r))
             yield r
-        for values in it:
-            cells = [format_value(v) for v in values]
+        for row in it:
+            cells = _row_texts(row)
             if any(c.strip() for c in cells):
                 st.table_rows += 1
                 st.add_text("".join(cells))
@@ -359,13 +517,20 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
     full = cells <= opts.xlsx_full_load_max_cells
     wb = openpyxl.load_workbook(str(path), read_only=not full, data_only=True)
     if not full:
-        doc.notes.append(
-            f"大きなブック（{cells:,} セル）のため省メモリで読み込み: "
-            "セル結合・複数の表・非表示の判定と表示形式の反映は行わず、1 シート = 1 表で出力"
+        doc.losses.append(
+            (
+                "convert.large_workbook",
+                f"大きなブック（{cells:,} セル。上限 {opts.xlsx_full_load_max_cells:,}）のため"
+                "省メモリで読み込みました: "
+                "セル結合・複数の表・非表示・注記の判定は行わず、1 シート = 1 表で出力しています",
+                "結合や複数の表を正しく出すには --max-cells でこのブックのセル数より大きな値を指定してください"
+                "（メモリはセル 100 万個で約 800MB 使います）",
+            )
         )
     raw = 0
     hidden_rows = hidden_sheets = filled = 0
     lost_formats: dict[str, list[str]] = {}  # 再現できなかった表示形式 → セル（シート名!A1）
+    flattened: list[str] = []  # 表らしいのに段落にした範囲（シート名!A1:C3）
     try:
         for ws in wb.worksheets:
             hidden = getattr(ws, "sheet_state", "visible") != "visible"
@@ -390,6 +555,7 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
             st.table_rows += res.rows
             st.add_text(res.text)
             filled += res.filled
+            flattened += [f"{ws.title}!{ref}" for ref in res.flattened]
             yield from res.blocks
     finally:
         wb.close()
@@ -401,6 +567,18 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
         doc.warnings.append(f"非表示の行 {hidden_rows} 行を含めて出力しています（除外するには --skip-hidden）")
     if filled:
         doc.notes.append(f"縦に結合されたセル {filled} 個は上の値を繰り返して出力")
+    if flattened:
+        doc.losses.append(
+            (
+                "loss.table_as_paragraph",
+                f"見出し行が見つからないため、表らしい範囲 {len(flattened)} か所を"
+                "段落（値を / で区切った行）で出力しました: "
+                + ", ".join(flattened[:5])
+                + (f" ほか {len(flattened) - 5} か所" if len(flattened) > 5 else ""),
+                "表として出すには --header-row で見出し行を指定してください"
+                "（例: --header-row 3 または --header-row シート名=3）",
+            )
+        )
     for fmt, refs in lost_formats.items():
         if refs:
             doc.losses.append(("loss.number_format", number_format_message(fmt, refs), NUMBER_FORMAT_SUGGESTION))

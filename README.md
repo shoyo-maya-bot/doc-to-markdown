@@ -100,7 +100,8 @@ figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io 
 
 ### 終了コード
 
-`0` 成功 ／ `1` 変換失敗あり（`--strict` なら警告ありも）／ `2` 引数・入力の誤り、必要な外部ソフトが無い ／ `3` 実行時エラー
+`0` 成功 ／ `1` 変換失敗あり（`--strict` なら警告ありも）／ `2` 引数・入力の誤り、必要な外部ソフトが無い、
+zip の展開サイズ・圧縮率が上限超え ／ `3` 実行時エラー
 
 ## 性能の目安
 
@@ -113,7 +114,16 @@ figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io 
 | PDF 300 ページ | 約 22 秒 | 約 90 MB |
 | Word 5,000 段落 + 表 100 個 | 約 0.4 秒 | 約 95 MB |
 
-Excel は 20 万セル（`--max-cells`）を超えると省メモリ読み込みに切り替わります（結合・複数表・非表示の判定をしない代わりにメモリ一定）。
+Excel は 20 万セルを超えると省メモリ読み込みに切り替わります（結合・複数表・非表示の判定をしない代わりにメモリ一定。
+表示形式は反映します）。切り替えたときは `convert.large_workbook`（warning）で知らせます。
+
+### 上限の設定
+
+| オプション | 既定 | 内容 |
+|---|---|---|
+| `--max-cells N` | 200000 | これを超えるセル数の Excel は省メモリ読み込み。結合や複数の表を正しく出したいときは大きくする（メモリはセル 100 万個で約 800MB） |
+| `--max-unzipped-mb N` | 1024 | Office 形式（zip）の展開後の合計サイズの上限（MB）。超えたら変換せずに終了コード 2 |
+| `--max-zip-ratio N` | 500 | Office 形式の中の 1MB 以上のファイルの圧縮率の上限。超えたら変換せずに終了コード 2（zip 爆弾対策） |
 
 ## 分かっている制限
 
@@ -149,6 +159,7 @@ flowchart LR
 
 ```bash
 ./setup.sh --dev          # Windows: .\scripts\setup.ps1 -Dev
+pip install -c constraints.txt -e ".[dev]"   # CI と同じ版で入れる場合（constraints.txt は deps-lock ワークフローが更新）
 ruff check . && ruff format --check .
 pytest                    # 外部ソフトが無いテストは skip
 UPDATE_GOLDEN=1 pytest    # 変換結果を意図して変えたとき期待値を更新（差分を PR でレビュー）

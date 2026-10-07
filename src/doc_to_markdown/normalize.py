@@ -45,11 +45,11 @@ def normalize(blocks: Iterable[Block]) -> Iterator[Block]:
             level = max(1, min(b.level, prev_heading + 1, 6))
             prev_heading = level
             prev_list_level = -1
-            yield Heading(level, text, b.synthetic)
+            yield Heading(level, text, b.synthetic, b.markup)
         elif isinstance(b, Paragraph):
             text = clean_text(b.text)
             if text:
-                yield Paragraph(text, b.synthetic)
+                yield Paragraph(text, b.synthetic, b.markup)
             prev_list_level = -1
         elif isinstance(b, ListItem):
             text = clean_text(b.text).replace("\n", " ")

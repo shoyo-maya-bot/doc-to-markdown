@@ -461,14 +461,14 @@ class _Converter:
             level = self._heading_level(p)
             if level:
                 self.st.headings += 1
-                yield Heading(level, text)
+                yield Heading(level, text, markup=True)
             else:
                 info = self._list_info(p)
                 if info:
                     self.st.list_items += 1
                     yield ListItem(text, info[0], info[1])
                 else:
-                    yield Paragraph(text)
+                    yield Paragraph(text, markup=True)
         for tb in inl.textboxes:
             self.st.add_text(_strip_markup(tb))
             yield Quote(tb, "テキストボックス")
