@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Added（第 5 回）
+
+- `--loss-threshold PERCENT`（既定 95）: 本文の文字数のロス検知（`loss.text` / `loss.raw_text`）のしきい値を変えられる。
+  文字数だけを見るため小さな欠落・入れ替わり・文字化けは検知できないことを README・WORKFLOW に明記
+
+### Fixed（第 5 回）
+
+- Word の番号付き箇条書きが段落や表を挟むたびに 1 に戻っていたのを、Word と同じ続き番号にする
+  （numId・段ごと。同じ抽象番号の一覧は続け、`startOverride` で振り直し、`w:start` を反映）
+- 大きなブックの省メモリ読み込みで `--header-row` と `--skip-hidden` が黙って無視されていたのを、どちらも効くようにする
+  （非表示の行・列はシートの XML から読む。判定できなければ `convert.hidden_unknown`（warning））。
+  省メモリ読み込みでも、非表示の行を含めて出力したときは `convert.warning` で知らせる
+- 前回の出力が BOM 付きで保存し直されていると Front Matter の `id`・`source` を読めず、`id` を失っていたのを直す
+  （utf-8-sig で読む。llms.txt の作成も同様）
+
 ### Fixed（第 4 回）
 
 - 壊れた入力（拡張子だけ .docx のテキスト、途中で切れた zip・PDF、Word の部品の無い zip、壊れた draw.io の XML 等）を

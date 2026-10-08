@@ -206,7 +206,13 @@ def convert_file(
     if old_assets is not None:
         shutil.rmtree(old_assets, ignore_errors=True)
 
-    findings += lossaudit.audit(doc.stats, out, location=src.name, raw_text_chars=doc.raw_text_chars)
+    findings += lossaudit.audit(
+        doc.stats,
+        out,
+        location=src.name,
+        raw_text_chars=doc.raw_text_chars,
+        text_ratio_min=opts.loss_threshold / 100,
+    )
     findings += [Finding("convert.warning", Severity.WARNING, w, location=src.name) for w in doc.warnings]
     findings += [
         Finding(rule, Severity.WARNING, msg, location=src.name, suggestion=hint) for rule, msg, hint in doc.losses
@@ -284,7 +290,9 @@ _SOURCE_LINE = re.compile(r"^source:\s*(.*?)\s*$", re.M)
 def _front_matter_field(output: Path, rx: re.Pattern[str]) -> str:
     if not output.is_file():
         return ""
-    with output.open(encoding="utf-8", errors="replace") as f:
+    # 人が編集して BOM 付き（Windows のメモ帳など）で保存した出力も読む（utf-8-sig は BOM を除く）.
+    # 改行は open の既定（universal newlines）で \r\n も \n にそろう
+    with output.open(encoding="utf-8-sig", errors="replace") as f:
         head = f.read(4096)
     if not head.startswith("---\n"):
         return ""

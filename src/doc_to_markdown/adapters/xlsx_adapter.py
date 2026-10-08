@@ -18,7 +18,8 @@
 | 年度・数値だけの見出し（`項目 / 2024 / 2025`） | 年度の並び・太字・文字列として入力された数値で見出し行と判定 |
 | 1 列だけの表 | 見出しが太字、または本文がすべて数値で 3 行以上なら表 |
 | 見出し行が見つからない表らしい範囲 | 段落として出し、`loss.table_as_paragraph` で報告（`--header-row` で指定できる） |
-| 大きなブック | 20 万セル（`--max-cells`）を超えると省メモリ読み込み（1 シート = 1 表、結合の解決なし）。warning |
+| 大きなブック | 20 万セル（`--max-cells`）超は省メモリ読み込み（1 シート = 1 表、結合の解決なし）。warning |
+| 〃の見出し行・非表示 | `--header-row`・`--skip-hidden` は省メモリ読み込みでも有効 |
 """
 
 from __future__ import annotations
@@ -437,32 +438,119 @@ def _row_texts(row) -> list[str]:
     return [format_value(c.value, getattr(c, "number_format", None) or "") for c in row]
 
 
-def _stream_sheet(ws, doc: Document) -> Iterator[Block]:
-    it = ws.iter_rows()
-    head: list[list[str]] = []
-    for row in it:
+@dataclass
+class HiddenParts:
+    """省メモリ読み込みのシートの非表示の行・列（シートの XML から別に読む）."""
+
+    rows: set[int] = field(default_factory=set)
+    cols: set[int] = field(default_factory=set)
+    rows_with_values: int = 0  # 値のある非表示の行の数
+
+
+def _truthy(v: str | None) -> bool:
+    return v in ("1", "true")
+
+
+def scan_hidden(path: Path, member: str) -> HiddenParts:
+    """シートの XML を流し読みして非表示の行・列を集める（メモリは非表示の行・列の数だけ）."""
+    out = HiddenParts()
+    with zipfile.ZipFile(path) as z, z.open(member) as f:
+        for _, el in etree.iterparse(
+            f,
+            events=("end",),
+            tag=(f"{NS_MAIN}row", f"{NS_MAIN}col"),
+            resolve_entities=False,
+            no_network=True,
+            huge_tree=True,
+        ):
+            if el.tag == f"{NS_MAIN}col":
+                if _truthy(el.get("hidden")):
+                    try:
+                        lo, hi = int(el.get("min")), int(el.get("max"))
+                    except (TypeError, ValueError):
+                        continue
+                    out.cols.update(range(lo, min(hi, 16384) + 1))
+                continue
+            if _truthy(el.get("hidden")):
+                try:
+                    r = int(el.get("r"))
+                except (TypeError, ValueError):
+                    r = None
+                if r is not None:
+                    out.rows.add(r)
+                    if any(
+                        c.find(f"{NS_MAIN}v") is not None or c.find(f"{NS_MAIN}is") is not None
+                        for c in el.iterchildren(f"{NS_MAIN}c")
+                    ):
+                        out.rows_with_values += 1
+            el.clear()
+            parent = el.getparent()
+            while parent is not None and el.getprevious() is not None:
+                del parent[0]
+    return out
+
+
+def _stream_sheet(ws, doc: Document, opts: Options, hidden: HiddenParts | None = None) -> Iterator[Block]:
+    """1 シート = 1 表で、行をメモリに溜めずに出す.
+
+    見出し行は `--header-row`（シート名か `*`）があればその行、無ければ先頭 20 行から推定する。
+    `--skip-hidden` のときは hidden（シートの XML から読んだ非表示の行・列）を除く。
+    """
+    skip_rows = hidden.rows if hidden and opts.skip_hidden else set()
+    skip_cols = hidden.cols if hidden and opts.skip_hidden else set()
+
+    def cells_of(row) -> list[str]:
         cells = _row_texts(row)
-        if any(c.strip() for c in cells):
-            head.append(cells)
-            if len(head) >= 20:
+        if skip_cols:
+            cells = [v for i, v in enumerate(cells, start=1) if i not in skip_cols]
+        return cells
+
+    it = ((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=1), start=1) if idx not in skip_rows)
+    forced = opts.header_rows.get(ws.title, opts.header_rows.get("*"))
+    head: list[list[str]] = []
+    header_idx: int | None = None
+    if forced:
+        for idx, row in it:
+            cells = cells_of(row)
+            if idx == forced:
+                header_idx = len(head)
+                head.append(cells)
                 break
+            if idx > forced:  # 見出し行が非表示で除かれた: 次の行を見出しに
+                header_idx = len(head)
+                head.append(cells)
+                break
+            if any(c.strip() for c in cells):
+                head.append(cells)
+    else:
+        for _, row in it:
+            cells = cells_of(row)
+            if any(c.strip() for c in cells):
+                head.append(cells)
+                if len(head) >= 20:
+                    break
+        if head:
+            width = max(len(r) for r in head)
+            header_idx = 0
+            for i, r in enumerate(head):
+                texts = [c for c in r if c.strip()]
+                below = [c for c in head[i + 1] if c.strip()] if i + 1 < len(head) else []
+                if len(texts) >= max(2, math.ceil(width * 0.5)) and (
+                    mostly_text(texts) or (year_sequence(texts) and not year_sequence(below))
+                ):
+                    header_idx = i
+                    break
     if not head:
         yield Paragraph("（空のシート）", synthetic=True)
         return
-    width = max(len(r) for r in head)
-    header_idx = 0
-    for i, r in enumerate(head):
-        texts = [c for c in r if c.strip()]
-        below = [c for c in head[i + 1] if c.strip()] if i + 1 < len(head) else []
-        if len(texts) >= max(2, math.ceil(width * 0.5)) and (
-            mostly_text(texts) or (year_sequence(texts) and not year_sequence(below))
-        ):
-            header_idx = i
-            break
+    if header_idx is None:  # 指定の見出し行までにシートが終わった: すべて段落
+        header_idx = len(head)
     for r in head[:header_idx]:
         line = " / ".join(c for c in r if c.strip())
         doc.stats.add_text(line)
         yield Paragraph(line)
+    if header_idx >= len(head):
+        return
     st = doc.stats
     st.tables += 1
 
@@ -471,8 +559,8 @@ def _stream_sheet(ws, doc: Document) -> Iterator[Block]:
             st.table_rows += 1
             st.add_text("".join(r))
             yield r
-        for row in it:
-            cells = _row_texts(row)
+        for _, row in it:
+            cells = cells_of(row)
             if any(c.strip() for c in cells):
                 st.table_rows += 1
                 st.add_text("".join(cells))
@@ -516,6 +604,23 @@ def scan_workbook(path: Path) -> tuple[int, int]:
     return cells, uncached
 
 
+def _sheet_hidden_parts(path: Path, ws, doc: Document) -> HiddenParts | None:
+    """省メモリ読み込みのシートの非表示の行・列. 読めなければ警告して None（非表示も出力される）."""
+    member = str(getattr(ws, "_worksheet_path", "") or "").lstrip("/")
+    try:
+        return scan_hidden(path, member) if member else None
+    except (KeyError, OSError, zipfile.BadZipFile, etree.XMLSyntaxError):
+        pass
+    doc.losses.append(
+        (
+            "convert.hidden_unknown",
+            f"シート「{ws.title}」の非表示の行・列を判定できず、すべて出力しました",
+            "--max-cells でこのブックのセル数より大きな値を指定して通常の読み込みにしてください",
+        )
+    )
+    return None
+
+
 def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Block]:
     st = doc.stats
     yield Heading(1, path.stem, synthetic=True)
@@ -527,7 +632,8 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
                 "convert.large_workbook",
                 f"大きなブック（{cells:,} セル。上限 {opts.xlsx_full_load_max_cells:,}）のため"
                 "省メモリで読み込みました: "
-                "セル結合・複数の表・非表示・注記の判定は行わず、1 シート = 1 表で出力しています",
+                "セル結合・複数の表・注記の判定は行わず、1 シート = 1 表で出力しています"
+                "（--header-row・--skip-hidden は有効）",
                 "結合や複数の表を正しく出すには --max-cells でこのブックのセル数より大きな値を指定してください"
                 "（メモリはセル 100 万個で約 800MB 使います）",
             )
@@ -547,7 +653,10 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
             st.headings += 1
             yield Heading(2, ws.title + ("（非表示）" if hidden else ""))
             if not full:
-                yield from _stream_sheet(ws, doc)
+                parts = _sheet_hidden_parts(path, ws, doc)
+                if parts is not None and not opts.skip_hidden:
+                    hidden_rows += parts.rows_with_values
+                yield from _stream_sheet(ws, doc, opts, parts)
                 continue
             g = Grid(ws, opts)
             raw += count_chars(g.output_text())

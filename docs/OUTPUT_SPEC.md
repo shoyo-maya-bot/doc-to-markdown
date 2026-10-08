@@ -106,13 +106,18 @@ doc2md の出力は 2 つあります。
     日付 `2026-04-01`、日時 `2026-04-01 09:30`、整数の小数は `1000`（`1000.0` にしない）。
   - **再現できない表示形式**（指数 `0.00E+00`、分数 `# ?/?`、条件付き `[>=100]`、
     システムの長い日付 `[$-F800]` 等）は「標準」と同じ値を出し、`loss.number_format`（warning）で表示形式とセルを知らせる。
-- 20 万セル（`--max-cells`）を超えるブックは省メモリ読み込み: 1 シート = 1 表、結合・非表示・複数表・注記の判定なし
-  （表示形式は反映する）。`convert.large_workbook`（warning）で知らせる。
+- 20 万セル（`--max-cells`）を超えるブックは省メモリ読み込み: 1 シート = 1 表、結合・複数表・注記の判定なし
+  （表示形式は反映する）。`convert.large_workbook`（warning）で知らせる。`--header-row`（指定の行を見出しにし、
+  その上の行は段落）と `--skip-hidden`（シートの XML から読んだ非表示の行・列を除く）は省メモリ読み込みでも効く。
+  非表示の行・列を判定できなかったシートは `convert.hidden_unknown`（warning）で知らせる。
 - Office 形式（zip）は展開する前に、展開後の合計サイズ（既定 1024MB、`--max-unzipped-mb`）と、1MB 以上のファイルの
   圧縮率（既定 500 倍、`--max-zip-ratio`）を調べ、超えたら変換せずに終了コード 2 で止める（zip 爆弾対策）。
 
 **Word**: 変更履歴は既定で「承認後」の内容（`--track-changes`）。表の縦結合は値を繰り返し、入れ子の表は
 セル内に `列 / 列` を行ごとに `<br>` で並べる。
+番号付きの箇条書きは Word の番号どおりの **続き番号**（段落や表を挟んでも `3.` から続ける）。番号付けの単位は
+Word と同じ（同じ抽象番号を使う一覧は番号を続け、`startOverride` で振り直す指定があればそこから。開始番号 `w:start`
+も反映。スタイル `List Number` 等で番号を付けた段落はスタイルごとに続ける）。ある段の番号が進むとより深い段は 1 から。
 
 **PDF**: 見出し・箇条書き・段落の区切りは文字サイズ・太字・行頭記号・行間からの **推定**。
 2 段組みは左段 → 右段の順。全ページに繰り返し出る上端・下端の行（ヘッダー・フッター・ページ番号）は除去。
@@ -132,6 +137,7 @@ generator: "doc2md <版>"
 
 値はすべて JSON 文字列（YAML としても読める）。日時は入れない（同じ入力から常に同じ出力にするため）。
 Front Matter は変換ロス検知の集計に含めない。
+前回の出力から `id` と `source` を読むときは、人が BOM 付き（Windows のメモ帳など）・改行 CRLF で保存し直したファイルも読む。
 
 ### llms.txt / llms-full.txt（`--llms-txt`）
 
@@ -159,11 +165,12 @@ Front Matter は変換ロス検知の集計に含めない。
 | `convert.overwrite_other_source` | warning | 既存の出力（前回の実行）が別の元ファイルから作られていたが上書きした | 出力先を分けるか、古い出力を整理 |
 | `convert.warning` | warning | 利用者が確認すべき事項（未確定の変更履歴、非表示行を含む、数式の計算結果が無い、OCR したページがある、OCR できない 等） | **内容を確認**。AI エージェントは利用者に伝える |
 | `loss.headings` / `loss.list_items` / `loss.tables` / `loss.table_rows` / `loss.images` | warning | 変換時に認識した要素より出力が少ない（整形の段階で欠落） | 目視確認。不具合の可能性 |
-| `loss.text` | warning | 本文の文字数が認識した量の 95% 未満 | 同上 |
+| `loss.text` | warning | 本文の文字数が認識した量の 95%（`--loss-threshold`）未満 | 同上 |
 | `loss.number_format` | warning | Excel のセルの表示形式を再現できず、書式なしの値で出力した（`message` に表示形式と `シート名!セル`、6 セル目以降は件数のみ。表示形式ごとに 1 件） | 原本で該当セルの表示を確認し、必要なら Markdown を手で直す |
 | `loss.table_as_paragraph` | warning | Excel の表らしい範囲で見出し行が見つからず、段落（`値 / 値`）で出力した（`message` に `シート名!A1:C3`） | `--header-row` で見出し行を指定して再変換 |
-| `convert.large_workbook` | warning | 大きなブック（`--max-cells` 超え）を省メモリで読んだ。結合・複数の表・非表示・注記の判定をしていない | 必要なら `--max-cells` を上げて再変換 |
-| `loss.raw_text` | warning | **元ファイルから直接数えた** 文字の 95% 未満しか出力されていない（未対応の要素がある） | 図形・グラフ等を確認。`--via-pdf` と比較 |
+| `convert.large_workbook` | warning | 大きなブック（`--max-cells` 超え）を省メモリで読んだ。結合・複数の表・注記の判定をしていない（`--header-row`・`--skip-hidden` は効く） | 必要なら `--max-cells` を上げて再変換 |
+| `convert.hidden_unknown` | warning | 省メモリ読み込みのシートで非表示の行・列を判定できず、すべて出力した | `--max-cells` を上げて通常の読み込みで再変換 |
+| `loss.raw_text` | warning | **元ファイルから直接数えた** 文字の 95%（`--loss-threshold`）未満しか出力されていない（未対応の要素がある） | 図形・グラフ等を確認。`--via-pdf` と比較 |
 | `convert.failed` | error | 変換に失敗（`--continue-on-error` 時のみ。それ以外は終了コード 3） | ファイルが壊れていないか確認 |
 | `convert.input_error` | error | そのファイルだけの入力の誤り（zip の展開サイズ・圧縮率の上限超え、LibreOffice が無いのに .doc 等を指定、draw.io の圧縮された図の展開サイズの上限超え）。`--continue-on-error` 時のみ（最後に終了コード 1）。それ以外は終了コード 2 で即終了 | 入力ファイル・外部ツールを確認 |
 

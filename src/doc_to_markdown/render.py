@@ -171,6 +171,8 @@ def iter_chunks(blocks: Iterable[Block]) -> Iterator[tuple[str, list[Block]]]:
         if isinstance(b, ListItem):
             counters = {lv: n for lv, n in counters.items() if lv <= b.level}
             counters[b.level] = counters.get(b.level, 0) + 1
+            if b.ordered and b.number is not None:  # 元文書の続き番号（段落を挟んでも 1 に戻さない）
+                counters[b.level] = b.number
             marker = f"{counters[b.level]}." if b.ordered else "-"
             list_lines.append(_list_line(b, marker))
             list_blocks.append(b)
