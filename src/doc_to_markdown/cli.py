@@ -30,6 +30,7 @@ from .converter import collect_inputs, convert_file, output_names
 from .model import Options
 
 TOOL = "doc2md"
+TESSERACT_TIMEOUT = 60  # --check-env で tesseract --list-langs を待つ秒数（固まったままにしない）
 
 
 def _header_rows(values: list[str]) -> dict[str, int]:
@@ -203,7 +204,13 @@ def check_env() -> int:
     if tess:
         import subprocess
 
-        out = subprocess.run([tess, "--list-langs"], capture_output=True, text=True).stdout
+        try:
+            out = subprocess.run(
+                [tess, "--list-langs"], capture_output=True, text=True, timeout=TESSERACT_TIMEOUT
+            ).stdout
+        except (subprocess.TimeoutExpired, OSError) as e:
+            print(f"       OCR 言語: 取得できませんでした（{type(e).__name__}）")
+            return common_cli.ExitCode.OK
         langs = [ln.strip() for ln in out.splitlines()[1:] if ln.strip()]
         print(
             f"       OCR 言語: {' '.join(langs) or '(なし)'}"
@@ -220,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.inputs:
         raise common_cli.UsageError("変換するファイルかディレクトリを指定してください（doc2md --help）")
     opts = options_from_args(args)
-    files = collect_inputs(args.inputs, recursive=args.recursive)
+    files = collect_inputs(args.inputs, recursive=args.recursive, out_dir=args.out_dir)
     if not files:
         raise common_cli.UsageError("変換対象のファイルがありません")
 

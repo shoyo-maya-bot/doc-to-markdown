@@ -3,7 +3,7 @@
 - 図は svg に書き出して Markdown から参照（draw.io デスクトップの CLI がある場合）
 - 編集可能ソース（.drawio）も同じ assets/ にコピーし、書き出しとペアで保管する
 - 図の中身（図形ラベルと接続）をテキストでも出力し、検索・AI 読解・差分レビューに使えるようにする
-- 圧縮形式（deflate + base64）の diagram にも対応（展開後のサイズは --max-unzipped-mb まで）
+- 圧縮形式（deflate + base64）の diagram にも対応（展開後のサイズは全ページの合計で --max-unzipped-mb まで）
 - XML は defusedxml で解析する（信頼できない入力を想定）
 """
 
@@ -48,14 +48,38 @@ def _inflate(data: bytes, limit: int, name: str) -> bytes:
     return out + d.flush()
 
 
-def _diagram_root(diagram: ET.Element, *, limit: int = 1024 << 20, name: str = "") -> ET.Element | None:
+class InflateBudget:
+    """1 ファイルの中の圧縮された図の、展開後の合計サイズの残り（ページごとの上限だけでは、
+    上限ぎりぎりのページを多数並べた図で合計が際限なく増える）."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.remaining = limit
+
+    def take(self, data: bytes, name: str) -> bytes:
+        try:
+            out = _inflate(data, self.remaining, name)
+        except UsageError:
+            raise UsageError(
+                f"{name} の圧縮された図の展開後のサイズ（全ページの合計）が上限"
+                f" {self.limit // (1024 * 1024):,} MB を超えるため変換しません"
+                "（壊れたファイルか圧縮爆弾の疑い。正しいファイルなら --max-unzipped-mb で上限を上げてください）"
+            ) from None
+        self.remaining -= len(out)
+        return out
+
+
+def _diagram_root(
+    diagram: ET.Element, *, limit: int = 1024 << 20, name: str = "", budget: InflateBudget | None = None
+) -> ET.Element | None:
     model = diagram.find("mxGraphModel")
     if model is not None:
         return model.find("root")
     raw = (diagram.text or "").strip()
     if not raw:
         return None
-    xml = urllib.parse.unquote(_inflate(base64.b64decode(raw), limit, name).decode("utf-8"))
+    budget = budget or InflateBudget(limit)
+    xml = urllib.parse.unquote(budget.take(base64.b64decode(raw), name).decode("utf-8"))
     return SafeET.fromstring(xml).find("root")
 
 
@@ -98,8 +122,9 @@ def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Doc
         doc.blocks.append(Paragraph(f"図のソース: {source_link}（svg は draw.io で書き出してください）", markup=True))
 
     tree = SafeET.parse(path)  # 信頼できない XML（外部実体・展開攻撃）対策
+    budget = InflateBudget(limit)  # 上限はページごとではなくファイル全体の合計で見る
     for page_no, diagram in enumerate(tree.getroot().iter("diagram"), 1):
-        root = _diagram_root(diagram, limit=limit, name=path.name)
+        root = _diagram_root(diagram, name=path.name, budget=budget)
         name = diagram.get("name") or f"Page-{page_no}"
         st.headings += 1
         doc.blocks.append(Heading(2, name))

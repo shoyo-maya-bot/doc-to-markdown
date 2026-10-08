@@ -195,8 +195,13 @@ def convert_file(
         else:
             doc = ADAPTERS[suffix](src, assets, opts)
             out = _write(doc, output, header)
-    except BaseException:
+    except BaseException as e:
         _restore(old_assets, assets_dir)
+        if is_broken_input(e):
+            raise UsageError(
+                f"{src.name} を読み取れません（壊れたファイル、途中で切れたファイル、または拡張子と中身が違う可能性）:"
+                f" {type(e).__name__}: {e}"
+            ) from e
         raise
     if old_assets is not None:
         shutil.rmtree(old_assets, ignore_errors=True)
@@ -209,6 +214,47 @@ def convert_file(
     findings += [Finding("convert.note", Severity.INFO, n, location=src.name) for n in doc.notes]
     log.info("converted %s -> %s (%d chars, %d assets)", src.name, output.name, doc.stats.text_chars, assets.count)
     return Result(src, output, doc.stats, assets.count, use_pdf, findings)
+
+
+def _broken_input_types() -> tuple[type[BaseException], ...]:
+    """読み取りライブラリが「入力ファイルが壊れている・形式が違う」ときに投げる例外."""
+    import binascii
+    import xml.etree.ElementTree as ET  # noqa: S405 — 例外の型を参照するだけ
+    import zlib
+
+    import defusedxml
+    import docx.opc.exceptions
+    import openpyxl.utils.exceptions
+    import pdfminer.psexceptions
+    import pdfplumber.utils.exceptions
+    import pptx.exc
+    from lxml import etree
+
+    return (
+        zipfile.BadZipFile,
+        zlib.error,
+        EOFError,
+        binascii.Error,
+        UnicodeDecodeError,
+        ET.ParseError,
+        etree.XMLSyntaxError,
+        defusedxml.DefusedXmlException,
+        docx.opc.exceptions.OpcError,
+        pptx.exc.PythonPptxError,
+        openpyxl.utils.exceptions.InvalidFileException,
+        pdfminer.psexceptions.PSException,
+        pdfplumber.utils.exceptions.PdfminerException,
+    )
+
+
+def is_broken_input(e: BaseException) -> bool:
+    """e が入力ファイルの壊れ・形式違いによる例外か（引数・入力の誤り＝終了コード 2 として扱う）.
+
+    zip の中に必要な部品が無い（拡張子だけ .docx の別の zip 等）ときの zipfile の KeyError も含める。
+    """
+    if isinstance(e, KeyError) and "archive" in str(e):
+        return True
+    return isinstance(e, _broken_input_types())
 
 
 def _set_aside(assets_dir: Path) -> Path | None:
@@ -345,12 +391,52 @@ def _retitle(blocks, stem: str):
         yield b
 
 
-def collect_inputs(paths: list[Path], *, recursive: bool) -> list[Path]:
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_output(f: Path, folder: Path, out_dir: Path | None) -> bool:
+    """フォルダを探索して見つけた f が、前回までの出力（出力先の中身・抽出図フォルダ）か.
+
+    - 出力先が入力フォルダの中にあるとき（`doc2md docs/ -d docs/out -r`）は、出力先の中を丸ごと除く
+    - 出力先が入力フォルダそのもの（またはその親）のときは、出力先の直下の `<名前>.assets/`（抽出図と、
+      draw.io のソースの写し）の中を除く
+    """
+    if out_dir is None:
+        return False
+    f, folder = f.resolve(), folder.resolve()
+    if out_dir != folder and _is_within(out_dir, folder):
+        return _is_within(f, out_dir)
+    if _is_within(f, out_dir):
+        rel = f.relative_to(out_dir).parts
+        return any(part.endswith(".assets") for part in rel[:-1])
+    return False
+
+
+def collect_inputs(paths: list[Path], *, recursive: bool, out_dir: Path | None = None) -> list[Path]:
+    """変換対象のファイルを集める.
+
+    out_dir を渡すと、フォルダの探索で出力先（とその `.assets/`）の中のファイルを拾わない
+    （出力先を入力フォルダの中に置いて再実行したとき、前回の抽出図や draw.io のソースの写しを変換しない）。
+    ファイルを直接指定したときは除外しない。
+    """
+    out = out_dir.resolve() if out_dir is not None else None
     files: list[Path] = []
     for p in paths:
         if p.is_dir():
             it = p.rglob("*") if recursive else p.glob("*")
-            files += [f for f in it if f.is_file() and f.suffix.lower() in SUPPORTED and not f.name.startswith("~$")]
+            files += [
+                f
+                for f in it
+                if f.is_file()
+                and f.suffix.lower() in SUPPORTED
+                and not f.name.startswith("~$")
+                and not _is_output(f, p, out)
+            ]
         elif p.is_file():
             files.append(p)
         else:

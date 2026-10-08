@@ -152,7 +152,9 @@ def render_block(b: Block) -> str:
         head = f"**{escape_inline(b.label)}**: " if b.label else ""
         return "\n".join(f"> {head if i == 0 else ''}{ln}" for i, ln in enumerate(lines))
     if isinstance(b, FootnoteDef):
-        return f"[^{b.label}]: " + b.text.replace("\n", " ")
+        # 脚注・文末脚注・コメントの本文も本文と同じく HTML（`<`・`<!--`）と文字参照をエスケープする.
+        # 本文はアダプタが escape_markdown 済みの記法付き文字列（太字・リンク・<ins>）なので markup=True
+        return f"[^{b.label}]: " + escape_inline(b.text, markup=True).replace("\n", " ")
     if isinstance(b, Comment):
         return f"<!-- {escape_comment(b.text)} -->"
     if isinstance(b, StreamTable):

@@ -44,6 +44,8 @@ COLUMN_GAP = 1.5  # 文字サイズのこの倍率を超える語間は列の区
 MIN_TABLE_COLUMNS = 3
 EDGE_ZONE = 0.08  # ページ上端・下端のこの割合の範囲をヘッダー・フッター候補とする
 SCANNED_MAX_CHARS = 10
+OCR_LIST_TIMEOUT = 60  # tesseract --list-langs を待つ秒数
+OCR_PAGE_TIMEOUT = 300  # 1 ページの OCR を待つ秒数（超えたらそのページは読まずに警告）
 
 
 def _join(a: str, b: str) -> str:
@@ -261,11 +263,17 @@ class _Ocr:
         self.lang: str | None = None
         self.pages: list[int] = []
         self.skipped: list[int] = []
+        self.timed_out: list[int] = []
 
     def resolve_lang(self) -> str | None:
         if self.lang is not None or not self.exe:
             return self.lang
-        r = subprocess.run([self.exe, "--list-langs"], capture_output=True, text=True, timeout=60)
+        try:
+            r = subprocess.run([self.exe, "--list-langs"], capture_output=True, text=True, timeout=OCR_LIST_TIMEOUT)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            self.doc.warnings.append(f"Tesseract の言語一覧を取得できないため OCR を行いません（{type(e).__name__}）")
+            self.lang = ""
+            return None
         available = {ln.strip() for ln in r.stdout.splitlines()[1:] if ln.strip()}
         wanted = [x for x in self.opts.ocr_lang.split("+") if x]
         usable = [x for x in wanted if x in available]
@@ -289,13 +297,18 @@ class _Ocr:
         with secure_tempdir("doc2md-ocr-") as tmp:
             png = tmp / "page.png"
             page.to_image(resolution=self.opts.ocr_dpi).original.save(png)
-            r = subprocess.run(
-                [self.exe, str(png), "stdout", "-l", lang, "--psm", "3"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=300,
-            )
+            try:
+                r = subprocess.run(
+                    [self.exe, str(png), "stdout", "-l", lang, "--psm", "3"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=OCR_PAGE_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                self.timed_out.append(number)
+                self.skipped.append(number)
+                return None
         if r.returncode != 0:
             self.skipped.append(number)
             return None
@@ -307,6 +320,11 @@ class _Ocr:
             self.doc.warnings.append(
                 f"OCR で読み取ったページがあります（{_pages(self.pages)}）。"
                 "誤認識の可能性があるため原本と照合してください"
+            )
+        if self.timed_out:
+            self.doc.warnings.append(
+                f"OCR が {OCR_PAGE_TIMEOUT} 秒で終わらなかったページがあります（{_pages(self.timed_out)}）。"
+                "そのページは読み取っていません"
             )
         if self.skipped:
             reason = (
