@@ -19,3 +19,36 @@ jobs:
       extra-apt-packages: "libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr"
     secrets:
       DEPS_TOKEN: ${{ secrets.DEPS_TOKEN }}  # 必要なものだけを名前で渡す（secrets: inherit は使わない）
+
+  # カバレッジの測定と下限（共通 CI の python-ci.yml には inputs が無いので、このリポジトリで測る）.
+  # 下限は pyproject.toml の [tool.coverage.report] fail_under. 割ったら落ちる（下げずにテストを足す）
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system packages（--via-pdf / --recalc / OCR の経路も測る）
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (DEPS_TOKEN はこの手順の中だけで使い、ファイルに書かない)
+        env:
+          DEPS_TOKEN: ${{ secrets.DEPS_TOKEN }}
+        run: |
+          if [ -n "$DEPS_TOKEN" ]; then
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="url.https://x-access-token:${DEPS_TOKEN}@github.com/.insteadOf"
+            export GIT_CONFIG_VALUE_0="https://github.com/"
+          fi
+          pip install -e ".[dev]" -c constraints.txt
+      - name: pytest（カバレッジ。下限は pyproject.toml）
+        run: |
+          pytest -q --cov --cov-report=term-missing --cov-report=markdown:coverage.md
+          cat coverage.md >> "$GITHUB_STEP_SUMMARY"
