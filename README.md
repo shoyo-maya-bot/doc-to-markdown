@@ -100,11 +100,13 @@ figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io 
 
 ### 終了コード
 
-`0` 成功 ／ `1` 変換失敗あり（`--strict` なら警告ありも）／ `2` 引数・入力の誤り、必要な外部ソフトが無い、
-zip の展開サイズ・圧縮率が上限超え ／ `3` 実行時エラー
+`0` 成功 ／ `1` 変換失敗あり（`--continue-on-error` での一部失敗を含む。`--strict` なら警告ありも）／
+`2` 引数・入力の誤り、必要な外部ソフトが無い、zip の展開サイズ・圧縮率が上限超え（`--continue-on-error` なしのとき）／
+`3` 実行時エラー
 
 `--continue-on-error` では、ファイル単位の入力の誤り（上限超え・LibreOffice が無い .doc 等）もそのファイルの失敗
-（`convert.input_error`）として記録して残りを変換し、レポートと llms.txt を出してから終了コード 2 で終わります。
+（`convert.input_error`）として記録して残りを変換し、レポートと llms.txt を出してから終了コード 1（一部失敗）で終わります
+（全ファイル成功なら 0）。
 引数の誤り（`--header-row` の値など）と未対応の形式の直接指定は、何も書き出さずに即終了します。
 
 ## 性能の目安
