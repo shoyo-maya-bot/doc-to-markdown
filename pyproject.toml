@@ -10,7 +10,7 @@ license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "devtools-common[excel] @ git+https://github.com/shoyo-maya-bot/devtools-common.git@28bab4c4bfcf2eba9278a6c7a7ef2d660d983233",  # コミット SHA で固定
+  "devtools-common[excel] @ git+https://github.com/shoyo-maya-bot/devtools-common.git@2e25f8a11717ab387c7c2174d2a06b1a5eb37713",  # コミット SHA で固定
   "python-docx>=1.1",
   "openpyxl>=3.1",
   "python-pptx>=0.6.23",
