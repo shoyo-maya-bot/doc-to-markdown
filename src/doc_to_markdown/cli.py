@@ -232,6 +232,13 @@ def main(argv: list[str] | None = None) -> int:
         common_cli.write_output(text, args.output)
         return common_cli.ExitCode.FINDINGS if report.has_errors(findings) else common_cli.ExitCode.OK
 
+    # 使い方の誤り（未対応の形式を直接指定した等）は、1 ファイルも書く前に止める（--continue-on-error でも続行しない）
+    unsupported = [f.name for f in files if f.suffix.lower() not in SUPPORTED]
+    if unsupported:
+        raise common_cli.UsageError(
+            f"未対応の形式です: {', '.join(unsupported)}（対応: {', '.join(sorted(SUPPORTED))}）"
+        )
+
     findings: list[Finding] = []
     converted = []
     names = output_names(files)
@@ -251,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             r = convert_file(f, args.out_dir / sub, options=opts, name=name)
         except common_cli.UsageError:
-            raise
+            raise  # 引数・入力の誤り（未対応の形式・上限超過・外部ツールなし等）は --continue-on-error でも即終了
         except Exception as e:  # noqa: BLE001
             if not args.continue_on_error:
                 raise

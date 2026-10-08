@@ -466,12 +466,12 @@ class _Converter:
                 info = self._list_info(p)
                 if info:
                     self.st.list_items += 1
-                    yield ListItem(text, info[0], info[1])
+                    yield ListItem(text, info[0], info[1], markup=True)
                 else:
                     yield Paragraph(text, markup=True)
         for tb in inl.textboxes:
             self.st.add_text(_strip_markup(tb))
-            yield Quote(tb, "テキストボックス")
+            yield Quote(tb, "テキストボックス", markup=True)
         for img in inl.images:
             self.st.images += 1
             yield Image(img, alt=Path(img).stem)

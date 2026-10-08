@@ -178,22 +178,28 @@ def convert_file(
             )
         )
     assets_dir = out_dir / f"{name}.assets"
-    if assets_dir.exists():  # 再実行時に古い抽出図が残らないようにする（決定的な出力）
-        shutil.rmtree(assets_dir)
+    # 前回の抽出図は変換が成功してから消す（再実行で古い図を残さない／失敗したら前回の成果物を残す）
+    old_assets = _set_aside(assets_dir)
     assets = AssetWriter(out_dir, name)
     doc_id = "" if other_source else existing_id(output)  # 別文書の id は引き継がない
     header = front_matter(src, stem, doc_id) if opts.front_matter else ""
 
-    if use_pdf:
-        with secure_tempdir("doc2md-") as tmp:
-            pdf = office_to_pdf(src, tmp)
-            doc = pdf_adapter.convert(pdf, assets, opts)
-            # PDF のファイル名由来の H1 を元ファイル名に戻す（ブロックは逐次生成なので先頭だけ差し替える）
-            doc.blocks = _retitle(doc.blocks, stem)
-            out = _write(doc, output, header)  # 一時 PDF を読み終えてから削除する
-    else:
-        doc = ADAPTERS[suffix](src, assets, opts)
-        out = _write(doc, output, header)
+    try:
+        if use_pdf:
+            with secure_tempdir("doc2md-") as tmp:
+                pdf = office_to_pdf(src, tmp)
+                doc = pdf_adapter.convert(pdf, assets, opts)
+                # PDF のファイル名由来の H1 を元ファイル名に戻す（ブロックは逐次生成なので先頭だけ差し替える）
+                doc.blocks = _retitle(doc.blocks, stem)
+                out = _write(doc, output, header)  # 一時 PDF を読み終えてから削除する
+        else:
+            doc = ADAPTERS[suffix](src, assets, opts)
+            out = _write(doc, output, header)
+    except BaseException:
+        _restore(old_assets, assets_dir)
+        raise
+    if old_assets is not None:
+        shutil.rmtree(old_assets, ignore_errors=True)
 
     findings += lossaudit.audit(doc.stats, out, location=src.name, raw_text_chars=doc.raw_text_chars)
     findings += [Finding("convert.warning", Severity.WARNING, w, location=src.name) for w in doc.warnings]
@@ -203,6 +209,24 @@ def convert_file(
     findings += [Finding("convert.note", Severity.INFO, n, location=src.name) for n in doc.notes]
     log.info("converted %s -> %s (%d chars, %d assets)", src.name, output.name, doc.stats.text_chars, assets.count)
     return Result(src, output, doc.stats, assets.count, use_pdf, findings)
+
+
+def _set_aside(assets_dir: Path) -> Path | None:
+    """前回の抽出図フォルダを同じ場所の一時名に退避する（無ければ None）."""
+    if not assets_dir.exists():
+        return None
+    backup = Path(tempfile.mkdtemp(dir=assets_dir.parent, prefix=f".{assets_dir.name}.", suffix=".old"))
+    backup.rmdir()  # mkdtemp は一意な名前を取るためだけに使う（rename 先は存在してはいけない）
+    os.replace(assets_dir, backup)
+    return backup
+
+
+def _restore(backup: Path | None, assets_dir: Path) -> None:
+    """変換に失敗したとき: 途中まで書いた抽出図を消し、前回の抽出図を元に戻す."""
+    if assets_dir.exists():
+        shutil.rmtree(assets_dir, ignore_errors=True)
+    if backup is not None and backup.exists():
+        os.replace(backup, assets_dir)
 
 
 _ID_LINE = re.compile(r"^id:\s*(.*?)\s*$", re.M)

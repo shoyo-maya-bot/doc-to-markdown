@@ -57,7 +57,7 @@ def normalize(blocks: Iterable[Block]) -> Iterator[Block]:
                 continue
             level = max(0, min(b.level, prev_list_level + 1))
             prev_list_level = level
-            yield ListItem(text, level, b.ordered)
+            yield ListItem(text, level, b.ordered, b.markup)
         elif isinstance(b, Table):
             t = _normalize_table(b)
             if t:
@@ -66,7 +66,7 @@ def normalize(blocks: Iterable[Block]) -> Iterator[Block]:
         elif isinstance(b, Quote):
             text = clean_text(b.text)
             if text:
-                yield Quote(text, b.label)
+                yield Quote(text, b.label, b.markup)
             prev_list_level = -1
         elif isinstance(b, FootnoteDef):
             text = clean_text(b.text)

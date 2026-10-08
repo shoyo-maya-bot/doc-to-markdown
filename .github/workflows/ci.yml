@@ -12,28 +12,10 @@ permissions:
 
 jobs:
   ci:
-    uses: shoyo-maya-bot/devtools-workspace/.github/workflows/python-ci.yml@fdfade379dbb65ca8f5240a95a340514ae4595e9  # devtools-workspace の共通 CI（SHA 固定）
+    # devtools-workspace の共通 CI（SHA 固定）. lint・Linux/Windows のテスト・セキュリティ検査をまとめて流す
+    uses: shoyo-maya-bot/devtools-workspace/.github/workflows/python-ci.yml@80705bb12ce7055398175a073c7463e91a689196
     with:
       # --via-pdf / --recalc / OCR のテスト用（無ければ該当テストは skip される）
       extra-apt-packages: "libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr"
-    secrets: inherit
-
-  # 共通 CI はまだ Windows でテストしないので、このリポジトリで足す（パス・改行・文字コードの違いを見る）.
-  # LibreOffice・Tesseract は入れない（それを使うテストは skip される）
-  test-windows:
-    name: test (Windows, Python 3.12)
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-      - name: 依存を入れる（constraints.txt があれば版をそろえる）
-        shell: bash
-        run: |
-          C=""; [ -f constraints.txt ] && C="-c constraints.txt"
-          pip install $C -e ".[dev]"
-      - run: pytest -q -rs
+    secrets:
+      DEPS_TOKEN: ${{ secrets.DEPS_TOKEN }}  # 必要なものだけを名前で渡す（secrets: inherit は使わない）
