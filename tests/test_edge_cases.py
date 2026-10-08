@@ -553,7 +553,7 @@ class ScoreUp3Test(Base):
             str(good), str(big), str(good2), "-d", str(out_dir), "--continue-on-error",
             "--max-unzipped-mb", "1", "--llms-txt", "-f", "json",
         )  # fmt: skip
-        self.assertEqual(rc, 2)  # 入力の誤りがあったことは終了コードで分かる
+        self.assertEqual(rc, 1)  # 一部失敗（入力の誤り）は終了コード 1. 引数の誤り（2）とは区別する
         data = json.loads(out)
         self.assertEqual(data["meta"]["converted"], 2)
         errs = [f for f in data["findings"] if f["rule_id"] == "convert.input_error"]
@@ -574,7 +574,7 @@ class ScoreUp3Test(Base):
         out_dir = self.tmp / "out"
         with mock.patch("doc_to_markdown.office.find_soffice", return_value=None):
             rc, out, _ = run_cli(str(good), str(old), "-d", str(out_dir), "--continue-on-error", "-f", "json")
-        self.assertEqual(rc, 2)
+        self.assertEqual(rc, 1)
         data = json.loads(out)
         self.assertEqual(data["meta"]["converted"], 1)
         errs = [f["location"] for f in data["findings"] if f["rule_id"] == "convert.input_error"]
@@ -585,9 +585,14 @@ class ScoreUp3Test(Base):
         big = self._zip_bomb("b.xlsx")
         out_dir = self.tmp / "out"
         rc, _, _ = run_cli(str(big), "-d", str(out_dir), "--continue-on-error", "--max-unzipped-mb", "1", "--llms-txt")
-        self.assertEqual(rc, 2)
+        self.assertEqual(rc, 1)  # 続行した入力の誤りは、全件失敗でも変換失敗（1）として扱う
         self.assertTrue((out_dir / "llms.txt").is_file())
         self.assertTrue((out_dir / "llms-full.txt").is_file())
+
+    def test_continue_on_error_all_ok_exits_zero(self):
+        good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
+        rc, _, _ = run_cli(str(good), "-d", str(self.tmp / "out"), "--continue-on-error")
+        self.assertEqual(rc, 0)
 
     def test_argument_error_still_stops_immediately(self):
         good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
