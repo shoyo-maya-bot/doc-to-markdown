@@ -336,6 +336,8 @@ class SheetResult:
     filled: int
     # 表らしいのに見出し行が見つからず段落にした範囲（A1:C3 形式）
     flattened: list[str] = field(default_factory=list)
+    # 表の末尾から外して段落にした注記行のセル（A1 形式）
+    moved_notes: list[str] = field(default_factory=list)
 
 
 def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
@@ -360,6 +362,7 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
     count_tables = rows_total = filled = 0
     texts: list[str] = []
     flattened: list[str] = []
+    moved_notes: list[str] = []
     for (r0, c0, r1, c1), h in table_regions:
         if h is None:  # 表でない範囲（タイトル・作成者・注記）
             if looks_like_table(g, r0, c0, r1, c1):
@@ -392,6 +395,8 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
             vals = _logical_cells(g, last, c0, c1)
             if len(vals) == 1 and vals[0].lstrip().startswith(NOTE_PREFIXES):
                 notes.insert(0, vals[0])
+                col = next((c for c in range(c0, c1 + 1) if g.occupied(last, c)), c0)
+                moved_notes.insert(0, f"{get_column_letter(col)}{last}")
                 last -= 1
             else:
                 break
@@ -421,7 +426,7 @@ def sheet_blocks(ws, g: Grid, opts: Options, sheet_title: str) -> SheetResult:
         for n in notes:
             texts.append(n)
             blocks.append(Paragraph(n))
-    return SheetResult(blocks, count_tables, rows_total, "".join(texts), filled, flattened)
+    return SheetResult(blocks, count_tables, rows_total, "".join(texts), filled, flattened, moved_notes)
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +536,7 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
     hidden_rows = hidden_sheets = filled = 0
     lost_formats: dict[str, list[str]] = {}  # 再現できなかった表示形式 → セル（シート名!A1）
     flattened: list[str] = []  # 表らしいのに段落にした範囲（シート名!A1:C3）
+    moved_notes: list[str] = []  # 表の末尾から外して段落にした注記行（シート名!A10）
     try:
         for ws in wb.worksheets:
             hidden = getattr(ws, "sheet_state", "visible") != "visible"
@@ -545,7 +551,9 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
                 continue
             g = Grid(ws, opts)
             raw += count_chars(g.output_text())
-            hidden_rows += len([r for r in g.hidden_rows if any(k[0] == r for k in g.values)])
+            if g.hidden_rows:  # 値のある行を 1 回だけ集めてから数える（行 × セルの総当たりにしない）
+                rows_with_values = {r for r, _ in g.values}
+                hidden_rows += len(g.hidden_rows & rows_with_values)
             for fmt, cells in g.unsupported_formats.items():
                 lost_formats.setdefault(fmt, []).extend(
                     f"{ws.title}!{get_column_letter(c)}{r}" for r, c in cells if g.visible(r, c)
@@ -556,6 +564,7 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
             st.add_text(res.text)
             filled += res.filled
             flattened += [f"{ws.title}!{ref}" for ref in res.flattened]
+            moved_notes += [f"{ws.title}!{ref}" for ref in res.moved_notes]
             yield from res.blocks
     finally:
         wb.close()
@@ -565,6 +574,14 @@ def _blocks(path: Path, doc: Document, opts: Options, cells: int) -> Iterator[Bl
         doc.notes.append(f"非表示のシート {hidden_sheets} 枚" + ("を除外" if opts.skip_hidden else "を含めて出力"))
     if hidden_rows and not opts.skip_hidden:
         doc.warnings.append(f"非表示の行 {hidden_rows} 行を含めて出力しています（除外するには --skip-hidden）")
+    if moved_notes:
+        doc.warnings.append(
+            f"表の末尾の注記らしい行 {len(moved_notes)} 行（{'・'.join(NOTE_PREFIXES)} で始まる 1 セルだけの行）を"
+            "表から外し、表の後に段落で出力しました: "
+            + ", ".join(moved_notes[:5])
+            + (f" ほか {len(moved_notes) - 5} 行" if len(moved_notes) > 5 else "")
+            + "（表のデータなら --header-row で範囲を確かめるか、元の Excel で行頭の記号を見直してください）"
+        )
     if filled:
         doc.notes.append(f"縦に結合されたセル {filled} 個は上の値を繰り返して出力")
     if flattened:

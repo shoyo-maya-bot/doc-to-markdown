@@ -321,3 +321,102 @@ class ZipBombTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScoreUp2Test(Base):
+    """第 2 回修正: 続行モードでの使い方の誤り・各ブロックのエスケープ・注記行の警告・抽出図の保全・非表示行."""
+
+    def test_continue_on_error_stops_on_usage_error(self):
+        # 未対応の形式を直接指定したのは使い方の誤り. --continue-on-error でも続行せず、何も書かずに終了コード 2
+        good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="good.xlsx")
+        bad = self.tmp / "memo.txt"
+        bad.write_text("x", encoding="utf-8")
+        out_dir = self.tmp / "out"
+        rc, _, err = run_cli(str(good), str(bad), "-d", str(out_dir), "--continue-on-error")
+        self.assertEqual(rc, 2)
+        self.assertIn("未対応", err)
+        self.assertFalse((out_dir / "good.md").exists())
+
+    def test_continue_on_error_stops_on_zip_limit(self):
+        # 上限超過（UsageError）も続行しない（壊れたファイル＝実行時エラーとは区別する）
+        good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
+        big = self.tmp / "b.xlsx"
+        with zipfile.ZipFile(big, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("xl/big.xml", "0" * (2 << 20))
+        rc, _, err = run_cli(
+            str(good), str(big), "-d", str(self.tmp / "out"), "--continue-on-error", "--max-unzipped-mb", "1"
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("上限", err)
+
+    def test_list_item_is_escaped(self):
+        from doc_to_markdown.model import ListItem
+
+        md = render([ListItem("# 見出しではない"), ListItem("<!-- 消えない --> a|b", 1)])
+        self.assertEqual(md, "- \\# 見出しではない\n  - \\<!-- 消えない --> a\\|b\n")
+
+    def test_markup_list_item_keeps_inline_markup(self):
+        from doc_to_markdown.model import ListItem
+
+        md = render([ListItem("**太字** <ins>追加</ins>", markup=True)])
+        self.assertEqual(md, "- **太字** <ins>追加</ins>\n")
+
+    def test_quote_is_escaped(self):
+        from doc_to_markdown.model import Quote
+
+        md = render([Quote("# 図形の文字\n<!-- 消えない -->\n- 箇条書きではない", "SmartArt")])
+        self.assertEqual(md, "> **SmartArt**: \\# 図形の文字\n> \\<!-- 消えない -->\n> \\- 箇条書きではない\n")
+
+    def test_comment_cannot_be_closed_early(self):
+        from doc_to_markdown.model import Comment
+
+        md = render([Comment("a --> b\nc")])
+        self.assertEqual(md.count("-->"), 1)
+        self.assertTrue(md.startswith("<!-- a "))
+        self.assertTrue(md.rstrip("\n").endswith(" -->"))
+        self.assertNotIn("\n", md.rstrip("\n"))
+
+    def test_trailing_note_rows_are_reported(self):
+        rows = [["区分", "金額"], ["A", 1], ["B", 2], ["※ 税込"], ["注 端数切り捨て"]]
+        r, md = self.convert(self.book(rows))
+        self.assertIn("| B | 2 |", md)
+        self.assertIn("※ 税込", md)
+        warns = [f.message for f in r.findings if f.rule_id == "convert.warning"]
+        self.assertTrue(any("注記らしい行 2 行" in w and "Sheet1!A4" in w and "Sheet1!A5" in w for w in warns), warns)
+
+    def test_no_note_warning_without_note_rows(self):
+        r, _ = self.convert(self.book([["区分", "金額"], ["A", 1], ["B", 2]]))
+        self.assertFalse(any("注記らしい行" in f.message for f in r.findings))
+
+    def test_assets_kept_when_conversion_fails(self):
+        out_dir = self.tmp / "out"
+        assets = out_dir / "book.assets"
+        assets.mkdir(parents=True)
+        (assets / "book-01.png").write_bytes(b"old")
+        path = self.book([["区分", "金額"], ["A", 1], ["B", 2]])
+        with (
+            mock.patch.dict(converter.ADAPTERS, {".xlsx": mock.Mock(side_effect=RuntimeError("boom"))}),
+            self.assertRaises(RuntimeError),
+        ):
+            convert_file(path, out_dir)
+        self.assertEqual((assets / "book-01.png").read_bytes(), b"old")
+        self.assertEqual(sorted(p.name for p in out_dir.iterdir()), ["book.assets"])  # 退避用の一時フォルダを残さない
+
+    def test_stale_assets_removed_after_success(self):
+        out_dir = self.tmp / "out"
+        assets = out_dir / "book.assets"
+        assets.mkdir(parents=True)
+        (assets / "book-01.png").write_bytes(b"old")
+        convert_file(self.book([["区分", "金額"], ["A", 1], ["B", 2]]), out_dir)
+        self.assertFalse(assets.exists())
+        self.assertEqual(sorted(p.name for p in out_dir.iterdir()), ["book.md"])
+
+    def test_hidden_rows_counted_only_when_they_have_values(self):
+        path = self.book([["区分", "金額"], ["A", 1], ["B", 2], ["C", 3]])
+        wb = openpyxl.load_workbook(path)
+        ws = wb.active
+        ws.row_dimensions[3].hidden = True
+        ws.row_dimensions[10].hidden = True  # 値の無い非表示行は数えない
+        wb.save(path)
+        r, _ = self.convert(path)
+        self.assertTrue(any("非表示の行 1 行" in f.message for f in r.findings))

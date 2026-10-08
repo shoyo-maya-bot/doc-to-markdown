@@ -39,6 +39,7 @@ class ListItem:
     text: str
     level: int = 0
     ordered: bool = False
+    markup: bool = False  # Heading.markup と同じ
 
 
 @dataclass
@@ -67,6 +68,7 @@ class Quote:
 
     text: str
     label: str = ""
+    markup: bool = False  # Heading.markup と同じ
 
 
 @dataclass

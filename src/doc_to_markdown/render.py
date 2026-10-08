@@ -59,6 +59,20 @@ def escape_text(text: str, *, markup: bool = False) -> list[str]:
     return [escape_line_start(escape_inline(ln, markup=markup)) for ln in text.split("\n")]
 
 
+def escape_comment(text: str) -> str:
+    """HTML コメントの中身: `--`（`-->` でコメントが途中で閉じる）を崩し、1 行にする."""
+    text = text.replace("\n", " ")
+    while "--" in text:
+        text = text.replace("--", "- -")
+    return text
+
+
+def _list_line(b: ListItem, marker: str) -> str:
+    """箇条書き 1 行. 本文の行頭が見出し・引用などに化けないよう、段落と同じくエスケープする."""
+    text = escape_line_start(escape_inline(b.text, markup=b.markup).replace("\n", " "))
+    return "  " * b.level + f"{marker} {text}"
+
+
 def _cell(text: str) -> str:
     return escape_inline(text).replace("\n", "<br>")
 
@@ -98,13 +112,13 @@ def render_block(b: Block) -> str:
         alt = b.alt.replace("[", "").replace("]", "")
         return f"![{alt}]({b.path})"
     if isinstance(b, Quote):
-        lines = b.text.split("\n")
-        head = f"**{b.label}**: " if b.label else ""
+        lines = escape_text(b.text, markup=b.markup)
+        head = f"**{escape_inline(b.label)}**: " if b.label else ""
         return "\n".join(f"> {head if i == 0 else ''}{ln}" for i, ln in enumerate(lines))
     if isinstance(b, FootnoteDef):
         return f"[^{b.label}]: " + b.text.replace("\n", " ")
     if isinstance(b, Comment):
-        return f"<!-- {b.text} -->"
+        return f"<!-- {escape_comment(b.text)} -->"
     if isinstance(b, StreamTable):
         return "\n".join(iter_stream_table(b))
     raise TypeError(f"unknown block: {type(b).__name__}")
@@ -120,7 +134,7 @@ def iter_chunks(blocks: Iterable[Block]) -> Iterator[tuple[str, list[Block]]]:
             counters = {lv: n for lv, n in counters.items() if lv <= b.level}
             counters[b.level] = counters.get(b.level, 0) + 1
             marker = f"{counters[b.level]}." if b.ordered else "-"
-            list_lines.append("  " * b.level + f"{marker} {b.text}")
+            list_lines.append(_list_line(b, marker))
             list_blocks.append(b)
             continue
         if list_lines:
