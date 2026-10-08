@@ -20,6 +20,9 @@ _EXT_BY_TYPE = {
 class AssetWriter:
     """`<out>/<stem>.assets/<stem>-NN.<ext>` に書き出し、Markdown からの相対パスを返す.
 
+    返すのはファイルのパス（`/` 区切り）そのもの。stem に空白・括弧・`%` 等が含まれることがあるので、
+    Markdown のリンク先に入れるときは必ず render.link_destination を通す（Image ブロックは描画が通す）。
+
     同一内容の画像は 1 回だけ書き出す（重複排除）。番号は出現順なので同入力なら同出力になる。
     """
 

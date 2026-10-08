@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Fixed（第 3 回）
+
+- 画像・draw.io のソース・ハイパーリンク・llms.txt のリンク先に空白・括弧を含むパスや URL を入れても切れないよう、
+  その文字だけをパーセントエンコードする（`図 (1).assets/…` → `図%20%281%29.assets/…`。日本語はそのまま）
+- Word（markup=True の段落・見出し・箇条書き・表・脚注・コメント）でも、本文の `\` と Markdown 記号（`` ` `` `*` `_` `[` `]` `~`）を
+  エスケープする（太字・リンク・変更履歴など変換側の記法は残す）。本文の文字数（ロス検知）にはエスケープの `\` を数えない
+- `--continue-on-error` で、1 ファイルの入力の誤り（zip の上限超え、LibreOffice の無い .doc 等）で全体が止まっていた →
+  `convert.input_error`（error）として続行し、レポートと llms.txt を必ず出す（終了コードは 2。引数の誤りは従来どおり即終了）
+- draw.io の圧縮された図（deflate）の展開後のサイズに上限（`--max-unzipped-mb` と同じ値）を設ける（圧縮爆弾対策）
+
+### Changed（第 3 回）
+
+- devtools-common の固定を `cbe97d5` に更新
+- CI にカバレッジの測定と下限（85%。pyproject.toml の `[tool.coverage.report]`）を追加
+
 ### Changed
 
 - Excel の読み取りの共通部分（表示形式の反映 `render_value`、結合セルの索引、複数段の見出しの判定）を

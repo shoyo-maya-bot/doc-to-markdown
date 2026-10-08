@@ -46,6 +46,7 @@ from ..model import (
     Table,
     count_chars,
 )
+from ..render import escape_markdown, link_destination
 
 MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
 VML = "{urn:schemas-microsoft-com:vml}"
@@ -306,7 +307,7 @@ class _Converter:
             if f != fmt:
                 flush()
                 fmt = f
-            buf.append(text)
+            buf.append(escape_markdown(text))  # 素の文字（`\\` `*` `[` 等）は記号として残す
             for cid in self.active_comments:
                 self.comment_capture.setdefault(cid, []).append(text)
 
@@ -341,7 +342,7 @@ class _Converter:
                     if rid and rid in self.part.rels and self.part.rels[rid].is_external:
                         url = self.part.rels[rid].target_ref
                     if sub.strip():  # コメント対象の文字は内側の描画で記録済み
-                        emit_raw(f"[{sub.strip()}]({url})" if url else sub)
+                        emit_raw(f"[{sub.strip()}]({link_destination(url, path=False)})" if url else sub)
                 elif tag in INS_TAGS:
                     self.revisions += 1
                     if self.opts.track_changes == "reject":
@@ -379,7 +380,7 @@ class _Converter:
                 elif tag.startswith("{http://schemas.openxmlformats.org/officeDocument/2006/math}"):
                     math = "".join(t.text or "" for t in c.iter(M_T))
                     if math:
-                        emit_raw(math)
+                        emit_raw(escape_markdown(math))
 
         def run(r, mode: str) -> None:
             rpr = r.find(qn("w:rPr"))
@@ -484,7 +485,7 @@ class _Converter:
                 if inl.text.strip():
                     parts.append(inl.text)
                 parts += inl.textboxes
-                parts += [f"![{Path(i).stem}]({i})" for i in inl.images]
+                parts += [f"![{_alt(Path(i).stem)}]({link_destination(i)})" for i in inl.images]
             elif c.tag == TBL:
                 self.nested_tables += 1
                 rows = self.table_rows(c)
@@ -534,7 +535,7 @@ class _Converter:
         for r in rows:
             for c in r:
                 self.st.add_text(_strip_markup(c))
-        return Table(rows=rows, header=True)
+        return Table(rows=rows, header=True, markup=True)
 
     def header_footer(self) -> Iterator[Block]:
         items: list[str] = []
@@ -567,8 +568,8 @@ class _Converter:
             yield Heading(2, "ヘッダー・フッター", synthetic=True)
             for it in items:
                 self.st.list_items += 1
-                self.st.add_text(it.split(": ", 1)[1])
-                yield ListItem(it)
+                self.st.add_text(_strip_markup(it.split(": ", 1)[1]))
+                yield ListItem(it, markup=True)  # 本文は inline() でエスケープ済み（太字等の記法を含む）
 
     def note_definitions(self) -> Iterator[Block]:
         for (kind, note_id), label in list(self.labels.items()):
@@ -583,10 +584,10 @@ class _Converter:
                 el = self.comments.get(note_id)
                 if el is None:
                     continue
-                author = el.get(qn("w:author")) or "不明"
+                author = escape_markdown(el.get(qn("w:author")) or "不明")
                 body = " ".join(self.inline(p).text.strip() for p in el.iter(P_TAG))
                 self.st.add_text(_strip_markup(body))
-                target = "".join(self.comment_capture.get(note_id, [])).strip()
+                target = escape_markdown("".join(self.comment_capture.get(note_id, [])).strip())
                 suffix = f"（対象:「{target}」）" if target else ""
                 yield FootnoteDef(label, f"コメント（{author}）: {body}{suffix}")
 
@@ -607,6 +608,11 @@ class _Converter:
             self.doc.notes.append(f"入れ子の表 {self.nested_tables} 個はセル内に「列 / 列」形式で展開")
         if self.linked_images:
             self.doc.warnings.append(f"外部ファイルにリンクされた画像 {self.linked_images} 個は取り込めません")
+
+
+def _alt(text: str) -> str:
+    """画像の代替テキスト（描画の Image と同じく `[` `]` を除き、残りの記号をエスケープする）."""
+    return escape_markdown(text.replace("[", "").replace("]", ""))
 
 
 def _clone(el):
@@ -637,10 +643,16 @@ def _iter_cells(tr):
 
 _MD_MARKUP = re.compile(r"\[\^[^\]]+\]|\*\*\*|\*\*|\*|~~|</?ins>|!\[[^\]]*\]\([^)]+\)")
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]+\)")
+# escape_markdown で付けた `\\` を外す（`\\*` → `*`）. 記法の除去の前に私用領域の文字へ退避する
+_MD_ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
+_PUA = 0xE000
 
 
 def _strip_markup(text: str) -> str:
-    return _MD_MARKUP.sub("", _MD_LINK.sub(r"\1", text))
+    """本文の文字数を数えるため、変換側の記法（太字・リンク・脚注等）とエスケープの `\\` を除く."""
+    text = _MD_ESCAPED.sub(lambda m: chr(_PUA + ord(m.group(1))), text)
+    text = _MD_MARKUP.sub("", _MD_LINK.sub(r"\1", text))
+    return re.sub("[\ue021-\ue07e]", lambda m: chr(ord(m.group(0)) - _PUA), text)
 
 
 def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Document:

@@ -57,7 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-d", "--out-dir", type=Path, default=Path("out"), help="Markdown と抽出図の出力先（既定: out/）")
     p.add_argument("-r", "--recursive", action="store_true", help="ディレクトリを再帰的に探索する")
     p.add_argument("--strict", action="store_true", help="警告（変換ロスの疑い等）があれば終了コード 1")
-    p.add_argument("--continue-on-error", action="store_true", help="1 ファイルの失敗で止めずに続行する（バッチ用）")
+    p.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="1 ファイルの失敗（壊れたファイル・上限超過・外部ツールなし等）で止めずに続行する（バッチ用）。"
+        "レポートと llms.txt は必ず出す。入力の誤りがあったファイルがあれば終了コード 2",
+    )
     p.add_argument(
         "--dry-run", action="store_true", help="変換せず、各ファイルの処理方法（読み取り方式・必要な外部ツール）を表示"
     )
@@ -241,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings: list[Finding] = []
     converted = []
+    input_errors = 0  # --continue-on-error で続けた、ファイル単位の入力の誤り（UsageError）の数
     names = output_names(files)
     for f in files:
         sub, name = names[f]
@@ -257,8 +263,16 @@ def main(argv: list[str] | None = None) -> int:
             )
         try:
             r = convert_file(f, args.out_dir / sub, options=opts, name=name)
-        except common_cli.UsageError:
-            raise  # 引数・入力の誤り（未対応の形式・上限超過・外部ツールなし等）は --continue-on-error でも即終了
+        except common_cli.UsageError as e:
+            # そのファイルだけの入力の誤り（zip の上限超過、LibreOffice が無い .doc 等）.
+            # --continue-on-error なら、そのファイルの失敗として記録して続ける（終了コードは最後に 2）
+            if not args.continue_on_error:
+                raise
+            input_errors += 1
+            findings.append(
+                Finding("convert.input_error", Severity.ERROR, str(e), location=f.name, suggestion="入力ファイルを確認")
+            )
+            continue
         except Exception as e:  # noqa: BLE001
             if not args.continue_on_error:
                 raise
@@ -278,7 +292,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         findings.extend(r.findings)
 
-    if args.llms_txt and converted:
+    # --continue-on-error で失敗したファイルがあっても、変換できた分の索引は必ず作る（0 件なら空の索引）
+    if args.llms_txt:
         written = llmstxt.write(args.out_dir, [(r.source.name, r.output) for r in converted])
         findings.append(Finding("convert.llms_txt", Severity.INFO, "→ " + ", ".join(w.as_posix() for w in written)))
 
@@ -292,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     common_cli.write_output(text, args.output)
 
+    if input_errors:  # 入力の誤りは、続行しても終了コード 2（--continue-on-error なしのときと同じ意味）
+        return common_cli.ExitCode.USAGE
     if report.has_errors(findings):
         return common_cli.ExitCode.FINDINGS
     if args.strict and any(f.severity is Severity.WARNING for f in findings):

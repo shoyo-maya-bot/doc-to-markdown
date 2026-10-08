@@ -31,7 +31,7 @@ def _normalize_table(t: Table) -> Table | None:
     rows = [r + [""] * (width - len(r)) for r in rows]
     keep = [i for i in range(width) if any(r[i] for r in rows)]
     rows = [[r[i] for i in keep] for r in rows]
-    return Table(rows=rows, header=t.header)
+    return Table(rows=rows, header=t.header, markup=t.markup)
 
 
 def normalize(blocks: Iterable[Block]) -> Iterator[Block]:

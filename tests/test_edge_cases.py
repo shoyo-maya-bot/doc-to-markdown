@@ -337,15 +337,13 @@ class ScoreUp2Test(Base):
         self.assertIn("未対応", err)
         self.assertFalse((out_dir / "good.md").exists())
 
-    def test_continue_on_error_stops_on_zip_limit(self):
-        # 上限超過（UsageError）も続行しない（壊れたファイル＝実行時エラーとは区別する）
+    def test_zip_limit_stops_without_continue_on_error(self):
+        # --continue-on-error なしでは、上限超過（UsageError）で止まり終了コード 2
         good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
         big = self.tmp / "b.xlsx"
         with zipfile.ZipFile(big, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("xl/big.xml", "0" * (2 << 20))
-        rc, _, err = run_cli(
-            str(good), str(big), "-d", str(self.tmp / "out"), "--continue-on-error", "--max-unzipped-mb", "1"
-        )
+        rc, _, err = run_cli(str(good), str(big), "-d", str(self.tmp / "out"), "--max-unzipped-mb", "1")
         self.assertEqual(rc, 2)
         self.assertIn("上限", err)
 
@@ -420,3 +418,217 @@ class ScoreUp2Test(Base):
         wb.save(path)
         r, _ = self.convert(path)
         self.assertTrue(any("非表示の行 1 行" in f.message for f in r.findings))
+
+
+class ScoreUp3Test(Base):
+    """第 3 回修正: リンク先のエンコード・markup 段落のエスケープ・続行モードの入力誤り・draw.io の展開上限."""
+
+    @staticmethod
+    def _docx(path: Path, build) -> Path:
+        import docx
+
+        d = docx.Document()
+        build(d)
+        d.save(str(path))
+        return path
+
+    @staticmethod
+    def _hyperlink(paragraph, url: str, text: str) -> None:
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        rid = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+        h = OxmlElement("w:hyperlink")
+        h.set(qn("r:id"), rid)
+        r = OxmlElement("w:r")
+        t = OxmlElement("w:t")
+        t.text = text
+        r.append(t)
+        h.append(r)
+        paragraph._p.append(h)
+
+    # -- 1. リンク先 -----------------------------------------------------------
+    def test_link_destination_encodes_space_and_parens(self):
+        from doc_to_markdown.render import link_destination
+
+        self.assertEqual(
+            link_destination("a b (1).assets/a b (1)-01.png"), "a%20b%20%281%29.assets/a%20b%20%281%29-01.png"
+        )
+        self.assertEqual(link_destination("100%.assets/x.png"), "100%25.assets/x.png")
+        self.assertEqual(link_destination("仕様書.assets/仕様書-01.png"), "仕様書.assets/仕様書-01.png")
+        # URL の既にエンコード済みの部分は二重にしない
+        self.assertEqual(
+            link_destination("https://example.invalid/a%20b (c)", path=False), "https://example.invalid/a%20b%20%28c%29"
+        )
+
+    def test_image_block_path_with_space_and_parens(self):
+        from doc_to_markdown.model import Image
+
+        md = render([Image("図 (1).assets/図 (1)-01.png", alt="図")])
+        self.assertEqual(md, "![図](図%20%281%29.assets/図%20%281%29-01.png)\n")
+
+    def test_docx_image_and_hyperlink_with_space_and_parens(self):
+        import base64
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        img = self.tmp / "p.png"
+        img.write_bytes(png)
+
+        def build(d):
+            d.add_picture(str(img))
+            p = d.add_paragraph("参照: ")
+            self._hyperlink(p, "https://example.invalid/a b(c).html", "資料")
+            t = d.add_table(rows=1, cols=1)
+            t.cell(0, 0).paragraphs[0].add_run().add_picture(str(img))
+
+        src = self._docx(self.tmp / "仕様 (改).docx", build)
+        _, md = self.convert(src)
+        self.assertIn("](仕様%20%28改%29.assets/仕様%20%28改%29-01.png)", md)
+        self.assertNotIn("](仕様 (改)", md)
+        self.assertIn("[資料](https://example.invalid/a%20b%28c%29.html)", md)
+        # 表のセルの中の画像も同じ
+        self.assertRegex(md, r"\| !\[[^\]]*\]\(仕様%20%28改%29\.assets/")
+
+    def test_drawio_source_link_with_space_and_parens(self):
+        src = self.tmp / "承認 フロー (案).drawio"
+        shutil.copy(Path(__file__).resolve().parents[1] / "samples" / "approval-flow.drawio", src)
+        _, md = self.convert(src)
+        self.assertIn("[承認 フロー (案).drawio](承認%20フロー%20%28案%29.assets/承認%20フロー%20%28案%29.drawio)", md)
+
+    def test_llms_txt_link_with_space(self):
+        from doc_to_markdown import llmstxt
+
+        out = self.tmp / "o"
+        out.mkdir()
+        md = out / "a b (1).md"
+        md.write_text("# t\n", encoding="utf-8")
+        llmstxt.write(out, [("a b (1).docx", md)])
+        self.assertIn("(a%20b%20%281%29.md)", (out / "llms.txt").read_text(encoding="utf-8"))
+
+    # -- 2. markup=True の段落のエスケープ --------------------------------------
+    def test_docx_plain_text_symbols_are_escaped_but_bold_kept(self):
+        def build(d):
+            p = d.add_paragraph("パス C:\\temp\\*.txt と a_b_c と [注] と ~~x~~ と `code` ")
+            p.add_run("太字").bold = True
+            d.add_heading("見出し *重要*", level=1)
+            d.add_paragraph("項目 *1*", style="List Bullet")
+
+        r, md = self.convert(self._docx(self.tmp / "esc.docx", build))
+        self.assertIn("パス C:\\\\temp\\\\\\*.txt と a\\_b\\_c と \\[注\\] と \\~\\~x\\~\\~ と \\`code\\` **太字**", md)
+        self.assertIn("# 見出し \\*重要\\*", md)
+        self.assertIn("- 項目 \\*1\\*", md)
+        # エスケープの `\` は本文の文字数に入れない（ロス検知が誤検知しない・取りこぼしを見逃さない）
+        self.assertNotIn("loss.text", self.rules(r))
+        self.assertNotIn("loss.raw_text", self.rules(r))
+
+    def test_docx_table_cell_symbols_are_escaped(self):
+        def build(d):
+            t = d.add_table(rows=2, cols=2)
+            t.cell(0, 0).text = "区分"
+            t.cell(0, 1).text = "パス"
+            t.cell(1, 0).text = "*注*"
+            t.cell(1, 1).paragraphs[0].add_run("C:\\a|b").bold = True
+
+        _, md = self.convert(self._docx(self.tmp / "tbl.docx", build))
+        self.assertIn("| \\*注\\* | **C:\\\\a\\|b** |", md)
+
+    # -- 3. --continue-on-error でのファイル単位の入力の誤り ----------------------
+    def _zip_bomb(self, name: str) -> Path:
+        big = self.tmp / name
+        with zipfile.ZipFile(big, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("xl/big.xml", "0" * (2 << 20))
+        return big
+
+    def test_continue_on_error_continues_on_zip_limit(self):
+        import json
+
+        good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
+        big = self._zip_bomb("b.xlsx")
+        good2 = self.book([["区分", "金額"], ["C", 3], ["D", 4]], name="c.xlsx")
+        out_dir = self.tmp / "out"
+        rc, out, _ = run_cli(
+            str(good), str(big), str(good2), "-d", str(out_dir), "--continue-on-error",
+            "--max-unzipped-mb", "1", "--llms-txt", "-f", "json",
+        )  # fmt: skip
+        self.assertEqual(rc, 2)  # 入力の誤りがあったことは終了コードで分かる
+        data = json.loads(out)
+        self.assertEqual(data["meta"]["converted"], 2)
+        errs = [f for f in data["findings"] if f["rule_id"] == "convert.input_error"]
+        self.assertEqual([f["location"] for f in errs], ["b.xlsx"])
+        self.assertIn("上限", errs[0]["message"])
+        self.assertTrue((out_dir / "a.md").is_file())
+        self.assertTrue((out_dir / "c.md").is_file())
+        index = (out_dir / "llms.txt").read_text(encoding="utf-8")
+        self.assertIn("(a.md)", index)
+        self.assertIn("(c.md)", index)
+
+    def test_continue_on_error_continues_without_libreoffice(self):
+        import json
+
+        good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
+        old = self.tmp / "old.doc"
+        old.write_bytes(b"\xd0\xcf\x11\xe0")
+        out_dir = self.tmp / "out"
+        with mock.patch("doc_to_markdown.office.find_soffice", return_value=None):
+            rc, out, _ = run_cli(str(good), str(old), "-d", str(out_dir), "--continue-on-error", "-f", "json")
+        self.assertEqual(rc, 2)
+        data = json.loads(out)
+        self.assertEqual(data["meta"]["converted"], 1)
+        errs = [f["location"] for f in data["findings"] if f["rule_id"] == "convert.input_error"]
+        self.assertEqual(errs, ["old.doc"])
+        self.assertTrue((out_dir / "a.md").is_file())
+
+    def test_llms_txt_written_even_when_all_failed(self):
+        big = self._zip_bomb("b.xlsx")
+        out_dir = self.tmp / "out"
+        rc, _, _ = run_cli(str(big), "-d", str(out_dir), "--continue-on-error", "--max-unzipped-mb", "1", "--llms-txt")
+        self.assertEqual(rc, 2)
+        self.assertTrue((out_dir / "llms.txt").is_file())
+        self.assertTrue((out_dir / "llms-full.txt").is_file())
+
+    def test_argument_error_still_stops_immediately(self):
+        good = self.book([["区分", "金額"], ["A", 1], ["B", 2]], name="a.xlsx")
+        rc, _, err = run_cli(str(good), "--header-row", "x=y", "-d", str(self.tmp / "out"), "--continue-on-error")
+        self.assertEqual(rc, 2)
+        self.assertIn("--header-row", err)
+        self.assertFalse((self.tmp / "out" / "a.md").exists())
+
+    # -- 4. draw.io の zlib 展開の上限 -----------------------------------------
+    def _compressed_drawio(self, xml: str) -> Path:
+        import base64
+        import urllib.parse
+        import zlib
+
+        c = zlib.compressobj(9, zlib.DEFLATED, -15)
+        raw = c.compress(urllib.parse.quote(xml).encode()) + c.flush()
+        path = self.tmp / "bomb.drawio"
+        path.write_text(
+            f'<mxfile><diagram name="p">{base64.b64encode(raw).decode()}</diagram></mxfile>', encoding="utf-8"
+        )
+        return path
+
+    def test_drawio_inflate_limit(self):
+        from devtools_common.cli import UsageError
+
+        pad = "<!--" + "a" * (3 << 20) + "-->"
+        path = self._compressed_drawio(f"<mxGraphModel>{pad}<root/></mxGraphModel>")
+        with self.assertRaises(UsageError) as cm:
+            self.convert(path, max_unzipped_mb=1)
+        self.assertIn("上限", str(cm.exception))
+        # 上限内なら読める
+        r, _ = self.convert(path, max_unzipped_mb=8)
+        self.assertEqual(r.source.name, "bomb.drawio")
+
+    def test_drawio_inflate_limit_unit(self):
+        import zlib
+
+        from devtools_common.cli import UsageError
+
+        c = zlib.compressobj(9, zlib.DEFLATED, -15)
+        data = c.compress(b"x" * 5000) + c.flush()
+        self.assertEqual(drawio_adapter._inflate(data, 5000, "n"), b"x" * 5000)
+        with self.assertRaises(UsageError):
+            drawio_adapter._inflate(data, 4999, "n")
