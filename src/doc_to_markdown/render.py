@@ -33,10 +33,43 @@ _ORDERED = re.compile(r"^(\d{1,9})([.)])(?=[ \t]|$)")
 _CLOSING_HASHES = re.compile(r"([ \t])(#+)[ \t]*$")
 
 
+# 素の文字列のうち、行の途中でも Markdown のインライン記法（強調・コード・リンク・打ち消し）になる記号
+_INLINE_MARKUP = re.compile(r"([\\`*_\[\]~])")
+# リンク先に入れるとリンクが途中で切れる・解釈が変わる文字（空白・括弧・山括弧・制御文字・`\\`）.
+# URL の `%` は既にエスケープ（%20 等）でなければ %25 にする. ファイルのパスの `%` は常に %25 にする
+_DEST_UNSAFE_URL = re.compile(r"[\x00-\x20\x7f()<>\\]|%(?![0-9A-Fa-f]{2})")
+_DEST_UNSAFE_PATH = re.compile(r"[\x00-\x20\x7f()<>\\%]")
+
+
+def escape_markdown(text: str) -> str:
+    """素の文字列を、Markdown 記法を含む文字列（markup=True のブロック）に埋め込むためにエスケープする.
+
+    `\\` と、強調・コード・リンク・打ち消しになる記号（`` ` `` `*` `_` `[` `]` `~`）の前に `\\` を付ける。
+    行頭のブロック記法・HTML・文字参照は描画（escape_text 等）が別にエスケープする。
+    """
+    return _INLINE_MARKUP.sub(r"\\\1", text)
+
+
+def _percent(m: re.Match[str]) -> str:
+    return "".join(f"%{b:02X}" for b in m.group(0).encode("utf-8"))
+
+
+def link_destination(dest: str, *, path: bool = True) -> str:
+    """リンク・画像のリンク先を、空白や括弧を含んでも壊れない形にする（パーセントエンコード）.
+
+    `[文字](a (1).png)` は `)` でリンクが切れ、空白を含むとリンクにならない。該当する文字だけを
+    `%20` `%28` `%29` 等にする（日本語などはそのまま残す）。
+    path=True（既定）は出力フォルダからの相対パス（`%` も文字としてエンコードする）。
+    path=False は文書に書かれた URL（`%20` のように既にエンコード済みの部分はそのまま残す）。
+    """
+    return (_DEST_UNSAFE_PATH if path else _DEST_UNSAFE_URL).sub(_percent, dest)
+
+
 def escape_inline(text: str, *, markup: bool = False) -> str:
     """文字列の中の Markdown・HTML として解釈される文字をエスケープする.
 
     markup=True は変換側が意図して書いた記法（太字・リンク・脚注）を含む文字列: `\\` と `|` は触らない。
+    その中の素の文字列は、作る側（アダプタ）が escape_markdown でエスケープしておく。
     """
     if not markup:
         text = text.replace("\\", "\\\\").replace("|", "\\|")
@@ -73,7 +106,9 @@ def _list_line(b: ListItem, marker: str) -> str:
     return "  " * b.level + f"{marker} {text}"
 
 
-def _cell(text: str) -> str:
+def _cell(text: str, markup: bool = False) -> str:
+    if markup:  # 記法を含むセル（Word）: `\\` はアダプタがエスケープ済み. 列の区切りになる `|` だけを足す
+        return escape_inline(text, markup=True).replace("|", "\\|").replace("\n", "<br>")
     return escape_inline(text).replace("\n", "<br>")
 
 
@@ -81,8 +116,9 @@ def render_table(t: Table) -> str:
     rows = t.rows
     if not t.header:
         rows = [[f"列{i + 1}" for i in range(len(rows[0]))], *rows]
-    lines = ["| " + " | ".join(_cell(c) for c in rows[0]) + " |", "|" + " --- |" * len(rows[0])]
-    lines += ["| " + " | ".join(_cell(c) for c in r) + " |" for r in rows[1:]]
+    m = t.markup
+    lines = ["| " + " | ".join(_cell(c, m) for c in rows[0]) + " |", "|" + " --- |" * len(rows[0])]
+    lines += ["| " + " | ".join(_cell(c, m) for c in r) + " |" for r in rows[1:]]
     return "\n".join(lines)
 
 
@@ -110,7 +146,7 @@ def render_block(b: Block) -> str:
         return render_table(b)
     if isinstance(b, Image):
         alt = b.alt.replace("[", "").replace("]", "")
-        return f"![{alt}]({b.path})"
+        return f"![{alt}]({link_destination(b.path)})"
     if isinstance(b, Quote):
         lines = escape_text(b.text, markup=b.markup)
         head = f"**{escape_inline(b.label)}**: " if b.label else ""

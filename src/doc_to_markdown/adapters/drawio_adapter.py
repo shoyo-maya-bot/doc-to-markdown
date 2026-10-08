@@ -3,7 +3,7 @@
 - 図は svg に書き出して Markdown から参照（draw.io デスクトップの CLI がある場合）
 - 編集可能ソース（.drawio）も同じ assets/ にコピーし、書き出しとペアで保管する
 - 図の中身（図形ラベルと接続）をテキストでも出力し、検索・AI 読解・差分レビューに使えるようにする
-- 圧縮形式（deflate + base64）の diagram にも対応
+- 圧縮形式（deflate + base64）の diagram にも対応（展開後のサイズは --max-unzipped-mb まで）
 - XML は defusedxml で解析する（信頼できない入力を想定）
 """
 
@@ -19,10 +19,12 @@ import zlib
 from pathlib import Path
 
 import defusedxml.ElementTree as SafeET
+from devtools_common.cli import UsageError
 from devtools_common.executables import DRAWIO, find_executable
 
 from ..assets import AssetWriter
 from ..model import Document, Heading, Image, ListItem, Options, Paragraph
+from ..render import escape_markdown, link_destination
 
 _TAG = re.compile(r"<[^>]+>")
 
@@ -34,14 +36,26 @@ def _label(value: str | None) -> str:
     return re.sub(r"\s+", " ", html.unescape(text)).strip()
 
 
-def _diagram_root(diagram: ET.Element) -> ET.Element | None:
+def _inflate(data: bytes, limit: int, name: str) -> bytes:
+    """deflate（raw）を展開する. 展開後が limit バイトを超えたら途中で止める（圧縮爆弾対策）."""
+    d = zlib.decompressobj(-15)
+    out = d.decompress(data, limit + 1)
+    if len(out) > limit or d.unconsumed_tail:
+        raise UsageError(
+            f"{name} の圧縮された図の展開後のサイズが上限 {limit // (1024 * 1024):,} MB を超えるため変換しません"
+            "（壊れたファイルか圧縮爆弾の疑い。正しいファイルなら --max-unzipped-mb で上限を上げてください）"
+        )
+    return out + d.flush()
+
+
+def _diagram_root(diagram: ET.Element, *, limit: int = 1024 << 20, name: str = "") -> ET.Element | None:
     model = diagram.find("mxGraphModel")
     if model is not None:
         return model.find("root")
     raw = (diagram.text or "").strip()
     if not raw:
         return None
-    xml = urllib.parse.unquote(zlib.decompress(base64.b64decode(raw), -15).decode("utf-8"))
+    xml = urllib.parse.unquote(_inflate(base64.b64decode(raw), limit, name).decode("utf-8"))
     return SafeET.fromstring(xml).find("root")
 
 
@@ -63,28 +77,29 @@ def export_svg(src: Path, dest: Path, cli: str) -> bool:
 
 
 def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Document:
+    opts = opts or Options()
+    limit = opts.max_unzipped_mb * 1024 * 1024  # 圧縮された図の展開後の上限（Office の zip と同じ値を使う）
     doc = Document()
     st = doc.stats
     doc.blocks.append(Heading(1, path.stem, synthetic=True))
 
     source_rel = assets.copy_file(path, path.name)
+    source_link = f"[{escape_markdown(path.name)}]({link_destination(source_rel)})"  # 空白・括弧を含む名前でも切れない
     cli = find_drawio_cli()
     svg_name = f"{path.stem}.svg"
     if cli and export_svg(path, assets.dir / svg_name, cli):
         st.images += 1
         doc.blocks.append(Image(f"{assets.dir_name}/{svg_name}", alt=path.stem))
-        doc.blocks.append(Paragraph(f"編集用ソース: [{path.name}]({source_rel})", markup=True))
+        doc.blocks.append(Paragraph(f"編集用ソース: {source_link}", markup=True))
     else:
         doc.notes.append(
             "draw.io Desktop が見つからないため svg 書き出しを省略（ソースのみ保存。場所は DEVTOOLS_DRAWIO で指定可）"
         )
-        doc.blocks.append(
-            Paragraph(f"図のソース: [{path.name}]({source_rel})（svg は draw.io で書き出してください）", markup=True)
-        )
+        doc.blocks.append(Paragraph(f"図のソース: {source_link}（svg は draw.io で書き出してください）", markup=True))
 
     tree = SafeET.parse(path)  # 信頼できない XML（外部実体・展開攻撃）対策
     for page_no, diagram in enumerate(tree.getroot().iter("diagram"), 1):
-        root = _diagram_root(diagram)
+        root = _diagram_root(diagram, limit=limit, name=path.name)
         name = diagram.get("name") or f"Page-{page_no}"
         st.headings += 1
         doc.blocks.append(Heading(2, name))

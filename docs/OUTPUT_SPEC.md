@@ -164,6 +164,7 @@ Front Matter は変換ロス検知の集計に含めない。
 | `convert.large_workbook` | warning | 大きなブック（`--max-cells` 超え）を省メモリで読んだ。結合・複数の表・非表示・注記の判定をしていない | 必要なら `--max-cells` を上げて再変換 |
 | `loss.raw_text` | warning | **元ファイルから直接数えた** 文字の 95% 未満しか出力されていない（未対応の要素がある） | 図形・グラフ等を確認。`--via-pdf` と比較 |
 | `convert.failed` | error | 変換に失敗（`--continue-on-error` 時のみ。それ以外は終了コード 3） | ファイルが壊れていないか確認 |
+| `convert.input_error` | error | そのファイルだけの入力の誤り（zip の展開サイズ・圧縮率の上限超え、LibreOffice が無いのに .doc 等を指定、draw.io の圧縮された図の展開サイズの上限超え）。`--continue-on-error` 時のみ。それ以外は終了コード 2 で即終了 | 入力ファイル・外部ツールを確認 |
 
 `location` は元ファイル名です。
 
@@ -173,7 +174,7 @@ Front Matter は変換ロス検知の集計に含めない。
 |---|---|
 | 0 | すべて変換できた（warning があっても 0。`--strict` なら 1） |
 | 1 | `convert.failed` がある、または `--strict` で warning がある |
-| 2 | 未対応の形式、入力が無い、オプションの誤り、必要な外部ツール（LibreOffice 等）が無い、zip の展開サイズ・圧縮率が上限超え |
+| 2 | 未対応の形式、入力が無い、オプションの誤り、必要な外部ツール（LibreOffice 等）が無い、zip の展開サイズ・圧縮率が上限超え。`--continue-on-error` では、ファイル単位の入力の誤り（`convert.input_error`）は他のファイルの変換を続け、レポートと llms.txt を出してから 2 で終わる（引数の誤り・未対応の形式の直接指定は即終了） |
 | 3 | 想定外のエラー |
 
 ### dry-run（`--dry-run`）

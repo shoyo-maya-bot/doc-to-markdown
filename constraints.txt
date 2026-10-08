@@ -3,6 +3,7 @@ attrs==26.1.0
 cffi==2.1.1 ; platform_python_implementation != 'PyPy'
 charset-normalizer==3.5.2
 colorama==0.4.6 ; sys_platform == 'win32'
+coverage==7.16.2
 cryptography==50.0.2
 defusedxml==0.7.1
 et-xmlfile==2.0.0
@@ -21,6 +22,7 @@ pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementatio
 pygments==2.21.0
 pypdfium2==5.14.0
 pytest==9.1.1
+pytest-cov==7.1.0
 python-docx==1.2.0
 python-pptx==1.0.2
 pyyaml==6.0.3
@@ -28,7 +30,7 @@ referencing==0.37.0
 rpds-py==0.30.0 ; python_full_version < '3.11'
 rpds-py==2026.9.1 ; python_full_version >= '3.11'
 ruff==0.16.10
-tomli==2.5.0 ; python_full_version < '3.11'
+tomli==2.5.0 ; python_full_version <= '3.11'
 typing-extensions==4.16.0
 xlsxwriter==3.2.9
 

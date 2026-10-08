@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .render import link_destination
+
 _FENCE = "---\n"
 
 
@@ -37,9 +39,10 @@ def write(out_dir: Path, items: list[tuple[str, Path]], *, title: str = "変換�
         md = md_path.read_text(encoding="utf-8")
         name = _title(md, md_path.stem)
         rel = md_path.relative_to(out_dir).as_posix() if md_path.is_relative_to(out_dir) else md_path.as_posix()
-        index.append(f"- [{name}]({rel}): 元ファイル {source}")
+        index.append(f"- [{name}]({link_destination(rel)}): 元ファイル {source}")
         body = _strip_front_matter(md).rstrip("\n")
         full.append(f"<!-- source: {source} -->\n\n{body}")
+    out_dir.mkdir(parents=True, exist_ok=True)  # 全ファイルが失敗しても索引は作る
     index_path = out_dir / "llms.txt"
     full_path = out_dir / "llms-full.txt"
     index_path.write_text("\n".join(index) + "\n", encoding="utf-8", newline="\n")

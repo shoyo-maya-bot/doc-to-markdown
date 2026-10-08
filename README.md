@@ -48,7 +48,7 @@
 ```bash
 doc2md 仕様書.docx -d out/                          # out/仕様書.md と out/仕様書.assets/
 doc2md 仕様書.docx 仕様書.xlsx -d out/               # 名前が重なると out/仕様書.docx.md と out/仕様書.xlsx.md
-doc2md docs/ -d out/ -r --continue-on-error         # フォルダ一括（1 ファイル失敗しても続行）
+doc2md docs/ -d out/ -r --continue-on-error         # フォルダ一括（1 ファイル失敗しても続行。レポート・llms.txt は必ず出す）
 doc2md 見積.xlsx -d out/ --header-row "4月=4"        # 見出し行を指定（全シートなら --header-row 4）
 doc2md 台帳.xlsx -d out/ --skip-hidden --recalc      # 非表示を除く・数式を再計算
 doc2md 規程.docx -d out/ --track-changes show        # 変更履歴を ~~削除~~ <ins>挿入</ins> で表示
@@ -102,6 +102,10 @@ figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io 
 
 `0` 成功 ／ `1` 変換失敗あり（`--strict` なら警告ありも）／ `2` 引数・入力の誤り、必要な外部ソフトが無い、
 zip の展開サイズ・圧縮率が上限超え ／ `3` 実行時エラー
+
+`--continue-on-error` では、ファイル単位の入力の誤り（上限超え・LibreOffice が無い .doc 等）もそのファイルの失敗
+（`convert.input_error`）として記録して残りを変換し、レポートと llms.txt を出してから終了コード 2 で終わります。
+引数の誤り（`--header-row` の値など）と未対応の形式の直接指定は、何も書き出さずに即終了します。
 
 ## 性能の目安
 

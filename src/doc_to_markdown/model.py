@@ -46,6 +46,7 @@ class ListItem:
 class Table:
     rows: list[list[str]]
     header: bool = True
+    markup: bool = False  # セルが変換側の書いた Markdown 記法を含む（Heading.markup と同じ）
 
 
 @dataclass
