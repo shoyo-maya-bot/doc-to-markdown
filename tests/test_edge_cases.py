@@ -1,4 +1,4 @@
-"""採点で見つかった取りこぼし・誤変換の回帰テスト（意地悪な入力）.
+"""これまでに見つかった取りこぼし・誤変換の回帰テスト（意地悪な入力）.
 
 - 年度・数値だけの見出し行、1 列だけの表、表を段落に落としたときの警告
 - `[h]:mm` などの経過時間の表示形式
@@ -76,7 +76,7 @@ class Base(unittest.TestCase):
 
 
 class YearHeaderTest(Base):
-    """見出しが `項目 / 2024 / 2025 / 2026` の表（採点で再現した入力）."""
+    """見出しが `項目 / 2024 / 2025 / 2026` の表（実務で見かける入力）."""
 
     ROWS = [
         ["項目", 2024, 2025, 2026],
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class ScoreUp2Test(Base):
+class BatchErrorsEscapeAndNotesTest(Base):
     """第 2 回修正: 続行モードでの使い方の誤り・各ブロックのエスケープ・注記行の警告・抽出図の保全・非表示行."""
 
     def test_continue_on_error_stops_on_usage_error(self):
@@ -420,7 +420,7 @@ class ScoreUp2Test(Base):
         self.assertTrue(any("非表示の行 1 行" in f.message for f in r.findings))
 
 
-class ScoreUp3Test(Base):
+class LinkEncodingAndPartialFailureTest(Base):
     """第 3 回修正: リンク先のエンコード・markup 段落のエスケープ・続行モードの入力誤り・draw.io の展開上限."""
 
     @staticmethod
