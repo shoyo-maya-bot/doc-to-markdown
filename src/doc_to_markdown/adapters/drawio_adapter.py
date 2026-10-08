@@ -73,12 +73,14 @@ def convert(path: Path, assets: AssetWriter, opts: Options | None = None) -> Doc
     if cli and export_svg(path, assets.dir / svg_name, cli):
         st.images += 1
         doc.blocks.append(Image(f"{assets.dir_name}/{svg_name}", alt=path.stem))
-        doc.blocks.append(Paragraph(f"編集用ソース: [{path.name}]({source_rel})"))
+        doc.blocks.append(Paragraph(f"編集用ソース: [{path.name}]({source_rel})", markup=True))
     else:
         doc.notes.append(
             "draw.io Desktop が見つからないため svg 書き出しを省略（ソースのみ保存。場所は DEVTOOLS_DRAWIO で指定可）"
         )
-        doc.blocks.append(Paragraph(f"図のソース: [{path.name}]({source_rel})（svg は draw.io で書き出してください）"))
+        doc.blocks.append(
+            Paragraph(f"図のソース: [{path.name}]({source_rel})（svg は draw.io で書き出してください）", markup=True)
+        )
 
     tree = SafeET.parse(path)  # 信頼できない XML（外部実体・展開攻撃）対策
     for page_no, diagram in enumerate(tree.getroot().iter("diagram"), 1):

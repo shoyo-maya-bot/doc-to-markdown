@@ -6,13 +6,61 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator
 
 from .model import Block, Comment, FootnoteDef, Heading, Image, ListItem, Paragraph, Quote, StreamTable, Table
 
+# 文字列の中の HTML（タグ・コメント）。描画で消えたり解釈されたりしないよう `\<` にする.
+# Word の変更履歴（<ins>）は変換側が付ける記法なので残す
+_HTML = re.compile(r"<(?!/?ins>)(?=[A-Za-z/!?])")
+# `&lt;` などの文字参照（そのまま書くと `<` に化ける）
+_ENTITY = re.compile(r"&(?=#?[0-9A-Za-z]+;)")
+# 行頭にあると Markdown のブロック記法として解釈されるもの
+_LINE_START = re.compile(
+    r"""^(?:
+        \#{1,6}(?:[ \t]|$)          # 見出し
+      | >                           # 引用
+      | [-+*](?:[ \t]|$)            # 箇条書き
+      | [-*_=][-*_= \t]*$           # 区切り線・Setext 見出しの下線
+      | `{3,} | ~{3,}               # コードブロック
+      | \[[^\]]*\]:                 # リンク参照の定義・脚注の定義（行ごと消える）
+    )""",
+    re.X,
+)
+_ORDERED = re.compile(r"^(\d{1,9})([.)])(?=[ \t]|$)")
+# 見出しの末尾の # は閉じ記号として消える
+_CLOSING_HASHES = re.compile(r"([ \t])(#+)[ \t]*$")
+
+
+def escape_inline(text: str, *, markup: bool = False) -> str:
+    """文字列の中の Markdown・HTML として解釈される文字をエスケープする.
+
+    markup=True は変換側が意図して書いた記法（太字・リンク・脚注）を含む文字列: `\\` と `|` は触らない。
+    """
+    if not markup:
+        text = text.replace("\\", "\\\\").replace("|", "\\|")
+    return _ENTITY.sub("\\\\&", _HTML.sub("\\\\<", text))
+
+
+def escape_line_start(line: str) -> str:
+    """行頭のブロック記法（見出し・箇条書き・番号付き・引用・区切り線 等）をエスケープする.
+
+    行頭の空白は Markdown では意味を持たない（4 つ以上はコードブロックになる）ので取り除く。
+    """
+    line = line.lstrip(" \t")
+    if _LINE_START.match(line):
+        return "\\" + line
+    return _ORDERED.sub(r"\1\\\2", line, count=1)
+
+
+def escape_text(text: str, *, markup: bool = False) -> list[str]:
+    """段落の本文を行ごとにエスケープする（段落の途中の行もブロック記法になり得る）."""
+    return [escape_line_start(escape_inline(ln, markup=markup)) for ln in text.split("\n")]
+
 
 def _cell(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+    return escape_inline(text).replace("\n", "<br>")
 
 
 def render_table(t: Table) -> str:
@@ -40,9 +88,10 @@ def iter_stream_table(t: StreamTable) -> Iterator[str]:
 def render_block(b: Block) -> str:
     """ListItem 以外の 1 ブロックを描画する."""
     if isinstance(b, Heading):
-        return "#" * b.level + " " + b.text
+        text = escape_inline(b.text, markup=b.markup).replace("\n", " ").strip()
+        return "#" * b.level + " " + _CLOSING_HASHES.sub(r"\1\\\2", text)
     if isinstance(b, Paragraph):
-        return "\\\n".join(b.text.split("\n"))  # 段落内の明示改行は GFM のハード改行
+        return "\\\n".join(escape_text(b.text, markup=b.markup))  # 段落内の明示改行は GFM のハード改行
     if isinstance(b, Table):
         return render_table(b)
     if isinstance(b, Image):
