@@ -33,7 +33,9 @@ def libreoffice_convert(src: Path, workdir: Path, target: str) -> Path:
         target,
         "--outdir",
         str(out_dir),
-        str(src),
+        # 絶対パスで渡す. 相対パスのまま `-x.docx` のような `-` で始まるファイル名を渡すと、
+        # LibreOffice がオプションとして読む
+        str(src.resolve()),
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=600)

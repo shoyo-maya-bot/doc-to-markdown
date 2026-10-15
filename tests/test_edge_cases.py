@@ -508,6 +508,25 @@ class LinkEncodingAndPartialFailureTest(Base):
         llmstxt.write(out, [("a b (1).docx", md)])
         self.assertIn("(a%20b%20%281%29.md)", (out / "llms.txt").read_text(encoding="utf-8"))
 
+    def test_llms_txt_link_text_escapes_brackets(self):
+        # 再現（第 6 回）: 見出し「a]b(c」をそのまま [..] に入れ、`]` でリンクの文字が切れ、
+        # `](` でリンク先が変わっていた
+        from doc_to_markdown import llmstxt
+
+        out = self.tmp / "o"
+        out.mkdir()
+        (out / "a]b(c.md").write_text("# a]b(c\n", encoding="utf-8")
+        (out / "b.md").write_text("# x \\[y\\](z)\n", encoding="utf-8")  # 描画でエスケープ済みの [ ] はそのまま
+        (out / "c.md").write_text("見出しなし\n", encoding="utf-8")
+        items = [("a]b(c.xlsx", out / "a]b(c.md"), ("b-->.docx", out / "b.md"), ("c[1](2).xlsx", out / "c.md")]
+        llmstxt.write(out, items)
+        index = (out / "llms.txt").read_text(encoding="utf-8")
+        self.assertIn("- [a\\]b(c](a]b%28c.md): 元ファイル a\\]b(c.xlsx", index)
+        self.assertIn("- [x \\[y\\](z)](b.md):", index)
+        self.assertIn("- [c](c.md): 元ファイル c\\[1\\](2).xlsx", index)
+        # llms-full.txt のコメントは -- で閉じない
+        self.assertIn("<!-- source: b- ->.docx -->", (out / "llms-full.txt").read_text(encoding="utf-8"))
+
     # -- 2. markup=True の段落のエスケープ --------------------------------------
     def test_docx_plain_text_symbols_are_escaped_but_bold_kept(self):
         def build(d):

@@ -56,6 +56,48 @@ def _signature(text: str) -> str:
     return re.sub(r"\d+", "#", re.sub(r"\s+", "", text))
 
 
+def _running_signatures(edges: dict[str, dict[int, str]], n_pages: int) -> set[str]:
+    """ページの端の行のうち、ヘッダー・フッター・ページ番号として除く行.
+
+    → {"=" + 文字（空白を除く）か "#" + 型（_signature）}.
+
+    edges は 型 → {ページの番号（0 から）: そのページで最初に出た行の文字（空白を除く）}.
+    - 文字がまったく同じ行（「運用手順書 第3版」など）: 半数以上（2 ページ以上）のページに出たら除く
+    - 数字だけが違う行: **全ページ** に出て、かつ違う数字がページ番号と同じ歩みで増えるとき
+      （「1 / 2」「- 3 -」「Page 3 of 10」）だけ除く.
+      「合計 1200 円」のような本文の行は、数字の違い方がページ番号と合わないので残す（誤って消さない）
+    """
+    out = set()
+    for sig, by_page in edges.items():
+        if not sig or len(by_page) < 2:
+            continue
+        texts = set(by_page.values())
+        if len(texts) == 1:
+            if len(by_page) >= n_pages * 0.5:
+                out.add("=" + texts.pop())  # 同じ文字の行だけを除く（数字違いの行は除かない）
+            continue
+        if len(by_page) < n_pages:
+            continue
+        numbers = {p: [int(x) for x in re.findall(r"\d+", t)] for p, t in by_page.items()}
+        if len({len(v) for v in numbers.values()}) != 1:
+            continue
+        ok = True
+        for i in range(len(next(iter(numbers.values())))):
+            values = {p: v[i] for p, v in numbers.items()}
+            if len(set(values.values())) == 1:
+                continue  # 変わらない数字（総ページ数・版・年など）
+            if len({v - p for p, v in values.items()}) != 1:
+                ok = False  # ページ番号の歩みと合わない（本文の数字）
+                break
+        if ok:
+            out.add("#" + sig)
+    return out
+
+
+def _is_running(text: str, running: set[str]) -> bool:
+    return "=" + re.sub(r"\s+", "", text) in running or "#" + _signature(text) in running
+
+
 # ---------------------------------------------------------------------------
 # 語 → 行
 # ---------------------------------------------------------------------------
@@ -357,12 +399,12 @@ def _ocr_blocks(text: str, st: SourceStats) -> list[Block]:
 
 
 # ---------------------------------------------------------------------------
-def _scan(pdf, opts: Options) -> tuple[Counter, Counter, int, int]:
-    """1 回目の走査: 文字サイズの分布・端の行の出現回数・全文字数・ページ数."""
+def _scan(pdf, opts: Options) -> tuple[Counter, dict[str, dict[int, str]], int, int]:
+    """1 回目の走査: 文字サイズの分布・端の行（型 → ページごとの文字. _running_signatures）・全文字数・ページ数."""
     sizes: Counter[float] = Counter()
-    edges: Counter[str] = Counter()
+    edges: dict[str, dict[int, str]] = {}
     raw = 0
-    for page in pdf.pages:
+    for index, page in enumerate(pdf.pages):
         chars = page.chars
         raw += count_chars("".join(ch["text"] for ch in chars))
         for ch in chars:
@@ -373,7 +415,7 @@ def _scan(pdf, opts: Options) -> tuple[Counter, Counter, int, int]:
             words = page.extract_words(keep_blank_chars=True)
             for ln in _lines([dict(w, size=w["bottom"] - w["top"], fontname="") for w in words]):
                 if ln["top"] < h * EDGE_ZONE or ln["bottom"] > h * (1 - EDGE_ZONE):
-                    edges[_signature(ln["text"])] += 1
+                    edges.setdefault(_signature(ln["text"]), {}).setdefault(index, re.sub(r"\s+", "", ln["text"]))
         page.close()
     return sizes, edges, raw, len(pdf.pages)
 
@@ -389,7 +431,7 @@ def _blocks(path: Path, doc: Document, opts: Options) -> Iterator[Block]:
         body_size = sizes.most_common(1)[0][0] if sizes else 10.0
         heading_sizes = sorted({s for s in sizes if s >= body_size * HEADING_RATIO}, reverse=True)
         level_of = {s: min(2 + i, 4) for i, s in enumerate(heading_sizes)}
-        running = {sig for sig, n in edges.items() if n >= max(2, n_pages * 0.5) and sig}
+        running = _running_signatures(edges, n_pages)
 
         for page in pdf.pages:
             number = page.page_number
@@ -412,7 +454,7 @@ def _blocks(path: Path, doc: Document, opts: Options) -> Iterator[Block]:
                     ln
                     for ln in _lines(words)
                     if (ln["top"] < h * EDGE_ZONE or ln["bottom"] > h * (1 - EDGE_ZONE))
-                    and _signature(ln["text"]) in running
+                    and _is_running(ln["text"], running)
                 ]
                 removed_chars += sum(count_chars(ln["text"]) for ln in removed)
                 words = [
@@ -449,9 +491,13 @@ def _blocks(path: Path, doc: Document, opts: Options) -> Iterator[Block]:
             yield from (b for _, b in items)
             page.close()  # ページ単位でキャッシュを解放（大きな PDF 対策）
     ocr.finish()
-    doc.raw_text_chars = max(0, raw - removed_chars)
+    # 除いたヘッダー・フッターの文字数は引かない（ロス検知 loss.raw_text が、誤って本文を消したときにも効くように）
+    doc.raw_text_chars = raw
     if running:
-        doc.notes.append(f"全ページに繰り返し出る行（ヘッダー・フッター・ページ番号）{len(running)} 種類を除去")
+        doc.notes.append(
+            f"ページの端に繰り返し出る行（ヘッダー・フッター・ページ番号）{len(running)} 種類・{removed_chars} 字を除去"
+            "（ロス検知 loss.raw_text の元の文字数からは引かない。除いた行を確かめるときは --keep-running-headers）"
+        )
     if two_column_pages:
         doc.notes.append(f"2 段組みとして左段 → 右段の順に読んだページ: {_pages(two_column_pages)}")
     doc.notes.append("PDF の見出し・箇条書きは文字サイズ・太字・行頭記号からの推定")
