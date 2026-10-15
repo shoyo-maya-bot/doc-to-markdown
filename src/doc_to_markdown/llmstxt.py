@@ -36,7 +36,7 @@ def write(out_dir: Path, items: list[tuple[str, Path]], *, title: str = "変換�
     index = [f"# {title}", "", f"> doc2md で Markdown に変換した {len(items)} 件の文書。", "", "## 文書", ""]
     full: list[str] = []
     for source, md_path in items:
-        md = md_path.read_text(encoding="utf-8")
+        md = md_path.read_text(encoding="utf-8-sig")  # BOM 付きで保存し直されたファイルも読む
         name = _title(md, md_path.stem)
         rel = md_path.relative_to(out_dir).as_posix() if md_path.is_relative_to(out_dir) else md_path.as_posix()
         index.append(f"- [{name}]({link_destination(rel)}): 元ファイル {source}")

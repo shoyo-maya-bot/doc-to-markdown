@@ -47,6 +47,16 @@ def _header_rows(values: list[str]) -> dict[str, int]:
     return out
 
 
+def _loss_threshold(value: str) -> float:
+    try:
+        v = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"数値で指定してください: {value}") from None
+    if not 0 < v <= 100:  # nan もここで弾く
+        raise argparse.ArgumentTypeError(f"0 より大きく 100 以下で指定してください: {value}")
+    return v
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog=TOOL, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("inputs", nargs="*", type=Path, help=f"ファイルまたはディレクトリ（{' '.join(sorted(SUPPORTED))}）")
@@ -63,6 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="1 ファイルの失敗（壊れたファイル・上限超過・外部ツールなし等）で止めずに続行する（バッチ用）。"
         "レポートと llms.txt は必ず出す。失敗したファイルがあれば終了コード 1（一部失敗）。引数の誤りは即終了コード 2",
+    )
+    p.add_argument(
+        "--loss-threshold",
+        type=_loss_threshold,
+        default=95.0,
+        metavar="PERCENT",
+        help="本文の文字数が元の何 %% 未満なら loss.text / loss.raw_text で警告するか（既定 95）。"
+        "文字数だけを見るので、しきい値より小さな欠落・語の入れ替わり・文字化けは検知できない",
     )
     p.add_argument(
         "--dry-run", action="store_true", help="変換せず、各ファイルの処理方法（読み取り方式・必要な外部ツール）を表示"
@@ -154,6 +172,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         ocr_lang=args.ocr_lang,
         remove_running_headers=not args.keep_running_headers,
         front_matter=args.front_matter,
+        loss_threshold=args.loss_threshold,
     )
 
 

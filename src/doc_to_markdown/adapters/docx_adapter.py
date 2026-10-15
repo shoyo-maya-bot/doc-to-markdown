@@ -145,6 +145,7 @@ class _Converter:
         self.part = self.document.part
         self.doc = Document()
         self.st: SourceStats = self.doc.stats
+        self.list_counters: dict[str, dict[int, int]] = {}  # 番号付けの単位 → 段 → 直前の番号
         self.formats = self._numbering_formats()
         self.style_names, self.default_style = self._style_map()
         self.title_offset = 1 if any(self._is_title(p) for p in self.document.paragraphs) else 0
@@ -181,25 +182,60 @@ class _Converter:
         return out
 
     def _numbering_formats(self) -> dict[tuple[str, str], str]:
+        """(numId, ilvl) → 番号の書式（decimal / bullet 等）. あわせて続き番号の計算に使う情報を集める.
+
+        - self.num_starts: (numId, ilvl) → 開始番号（w:lvl/w:start、w:lvlOverride/w:startOverride で上書き）
+        - self.num_keys: numId → 番号を数える単位. Word は同じ抽象番号（abstractNum）を参照する numId どうしで
+          番号を続けるので抽象番号ごとに数える. startOverride を持つ numId は「ここから番号を振り直す」
+          指定なので、その numId だけで数える
+        """
+        self.num_starts: dict[tuple[str, str], int] = {}
+        self.num_keys: dict[str, str] = {}
         try:
             numbering = self.part.numbering_part.element
         except (KeyError, NotImplementedError, AttributeError):
             return {}
         abstract: dict[str, dict[str, str]] = {}
+        abstract_starts: dict[str, dict[str, int]] = {}
         for an in numbering.findall(qn("w:abstractNum")):
-            levels = {}
+            levels, starts = {}, {}
             for lvl in an.findall(qn("w:lvl")):
                 fmt = lvl.find(qn("w:numFmt"))
-                levels[lvl.get(qn("w:ilvl"))] = fmt.get(qn("w:val")) if fmt is not None else "bullet"
+                ilvl = lvl.get(qn("w:ilvl"))
+                levels[ilvl] = fmt.get(qn("w:val")) if fmt is not None else "bullet"
+                starts[ilvl] = _int_val(lvl.find(qn("w:start")), 1)
             abstract[an.get(qn("w:abstractNumId"))] = levels
+            abstract_starts[an.get(qn("w:abstractNumId"))] = starts
         result = {}
         for num in numbering.findall(qn("w:num")):
             ref = num.find(qn("w:abstractNumId"))
             if ref is None:
                 continue
-            for ilvl, fmt in abstract.get(ref.get(qn("w:val")), {}).items():
-                result[(num.get(qn("w:numId")), ilvl)] = fmt
+            num_id, abs_id = num.get(qn("w:numId")), ref.get(qn("w:val"))
+            for ilvl, fmt in abstract.get(abs_id, {}).items():
+                result[(num_id, ilvl)] = fmt
+            for ilvl, start in abstract_starts.get(abs_id, {}).items():
+                self.num_starts[(num_id, ilvl)] = start
+            restart = False
+            for ov in num.findall(qn("w:lvlOverride")):
+                so = ov.find(qn("w:startOverride"))
+                if so is not None:
+                    restart = True
+                    self.num_starts[(num_id, ov.get(qn("w:ilvl")))] = _int_val(so, 1)
+            self.num_keys[num_id] = f"num:{num_id}" if restart else f"abstract:{abs_id}"
         return result
+
+    def _next_number(self, key: str, level: int, start: int) -> int:
+        """番号付き箇条書きの次の番号. 段落・表を挟んでも同じ番号付け（key）の中では番号を続ける.
+
+        ある段の番号が進んだら、それより深い段の番号は振り直す（Word の既定の動き）。
+        """
+        counters = self.list_counters.setdefault(key, {})
+        n = counters.get(level, start - 1) + 1
+        counters[level] = n
+        for lv in [lv for lv in counters if lv > level]:
+            del counters[lv]
+        return n
 
     # -- 段落の種類 -----------------------------------------------------------
     def _style_map(self) -> tuple[dict[str, str], str]:
@@ -240,7 +276,8 @@ class _Converter:
                     return val + 1 + self.title_offset
         return None
 
-    def _list_info(self, p: DocxParagraph) -> tuple[int, bool] | None:
+    def _list_info(self, p: DocxParagraph) -> tuple[int, bool, int | None] | None:
+        """(段, 番号付きか, 番号) を返す. 番号は番号付きのときだけ（段落を挟んでも続き番号になる）."""
         ppr = p._p.pPr
         numpr = ppr.find(qn("w:numPr")) if ppr is not None else None
         name = self._style_name(p)
@@ -248,7 +285,10 @@ class _Converter:
         style_level = int(style_list.group(2) or 1) - 1 if style_list else 0
         if numpr is None:
             if style_list:
-                return style_level, style_list.group(1) == "Number"
+                ordered = style_list.group(1) == "Number"
+                # 番号付けをスタイルに持つ段落（"List Number" 等）はスタイルごとに番号を続ける
+                number = self._next_number(f"style:{name}", 0, 1) if ordered else None
+                return style_level, ordered, number
             return None
         ilvl_el, numid_el = numpr.find(qn("w:ilvl")), numpr.find(qn("w:numId"))
         ilvl = ilvl_el.get(qn("w:val")) if ilvl_el is not None else str(style_level)
@@ -256,7 +296,21 @@ class _Converter:
         if num_id == "0":  # 番号付け解除
             return None
         fmt = self.formats.get((num_id, ilvl), "bullet" if "Bullet" in name else "decimal")
-        return int(ilvl), fmt not in ("bullet", "none")
+        ordered = fmt not in ("bullet", "none")
+        try:
+            level = int(ilvl)
+        except (TypeError, ValueError):
+            level = 0
+        number = None
+        if ordered:
+            key = self.num_keys.get(num_id or "", f"num:{num_id}")
+            number = self._next_number(key, level, self.num_starts.get((num_id or "", ilvl), 1))
+        elif num_id is not None:
+            # 箇条書きの段も深い段の番号の振り直しに効く
+            counters = self.list_counters.get(self.num_keys.get(num_id, f"num:{num_id}"), {})
+            for lv in [lv for lv in counters if lv > level]:
+                del counters[lv]
+        return level, ordered, number
 
     # -- インライン -----------------------------------------------------------
     def _label(self, kind: str, note_id: str) -> str:
@@ -467,7 +521,7 @@ class _Converter:
                 info = self._list_info(p)
                 if info:
                     self.st.list_items += 1
-                    yield ListItem(text, info[0], info[1], markup=True)
+                    yield ListItem(text, info[0], info[1], markup=True, number=info[2])
                 else:
                     yield Paragraph(text, markup=True)
         for tb in inl.textboxes:
@@ -608,6 +662,16 @@ class _Converter:
             self.doc.notes.append(f"入れ子の表 {self.nested_tables} 個はセル内に「列 / 列」形式で展開")
         if self.linked_images:
             self.doc.warnings.append(f"外部ファイルにリンクされた画像 {self.linked_images} 個は取り込めません")
+
+
+def _int_val(el, default: int) -> int:
+    """w:val の整数値（無い・読めないときは default）."""
+    if el is None:
+        return default
+    try:
+        return int(el.get(qn("w:val")))
+    except (TypeError, ValueError):
+        return default
 
 
 def _alt(text: str) -> str:

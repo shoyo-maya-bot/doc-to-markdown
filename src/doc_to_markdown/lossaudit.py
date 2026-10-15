@@ -31,7 +31,7 @@ _MARKUP = re.compile(r"(\*\*\*|\*\*|\*|~~|</?ins>|\\\||<br>|^#{1,6} |^\s*(?:-|\d
 # バックスラッシュによるエスケープ（`\#` `\<` `\\` 等）は元の 1 文字として数える
 _ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
 
-TEXT_RATIO_MIN = 0.95
+TEXT_RATIO_MIN = 0.95  # 既定のしきい値（--loss-threshold 95）
 STRUCTURE_FIELDS = [
     ("headings", "見出し数"),
     ("list_items", "箇条書き数"),
@@ -97,7 +97,19 @@ class OutputStats:
             markdown_stats(markdown, self.structure)
 
 
-def audit(source: SourceStats, out: OutputStats, *, location: str, raw_text_chars: int | None = None) -> list[Finding]:
+def audit(
+    source: SourceStats,
+    out: OutputStats,
+    *,
+    location: str,
+    raw_text_chars: int | None = None,
+    text_ratio_min: float = TEXT_RATIO_MIN,
+) -> list[Finding]:
+    """ロスの疑いを返す. text_ratio_min は本文文字数の比のしきい値（0〜1. 既定 0.95）.
+
+    文字数の比だけを見るので、しきい値より小さな欠落（長い文書の中の 1 文・1 語）、
+    語の入れ替わり、別の文字への置き換え（文字化け）は検知できない。
+    """
     findings: list[Finding] = []
     for name, label in STRUCTURE_FIELDS:
         src, dst = getattr(source, name), getattr(out.structure, name)
@@ -114,7 +126,7 @@ def audit(source: SourceStats, out: OutputStats, *, location: str, raw_text_char
                     suggestion="--via-pdf での変換結果と比較してください",
                 )
             )
-    if source.text_chars and out.structure.text_chars < source.text_chars * TEXT_RATIO_MIN:
+    if source.text_chars and out.structure.text_chars < source.text_chars * text_ratio_min:
         ratio = out.structure.text_chars / source.text_chars
         findings.append(
             Finding(
@@ -130,7 +142,7 @@ def audit(source: SourceStats, out: OutputStats, *, location: str, raw_text_char
         )
     if raw_text_chars:
         produced = out.structure.text_chars
-        if produced < raw_text_chars * TEXT_RATIO_MIN:
+        if produced < raw_text_chars * text_ratio_min:
             ratio = produced / raw_text_chars
             findings.append(
                 Finding(

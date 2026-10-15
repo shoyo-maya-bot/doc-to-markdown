@@ -40,6 +40,9 @@ class ListItem:
     level: int = 0
     ordered: bool = False
     markup: bool = False  # Heading.markup と同じ
+    # 番号付きのときの番号（元文書の番号付けで決まる続き番号. Word の List Number 等）.
+    # None は描画側で連続する項目ごとに 1 から数える
+    number: int | None = None
 
 
 @dataclass
@@ -144,5 +147,8 @@ class Options:
     ocr_lang: str = "jpn+eng"
     ocr_dpi: int = 300
     remove_running_headers: bool = True  # 全ページに繰り返し出る行（ヘッダー・フッター・ページ番号）を除く
+    # ロス検知（loss.text / loss.raw_text）のしきい値: 出力の本文文字数が元の何 % 未満なら警告するか.
+    # 文字数だけを見るので、短い語の欠落・語の入れ替わり・誤った文字への置き換えは検知できない
+    loss_threshold: float = 95.0
     # 出力 Markdown の先頭に YAML の Front Matter（title / id / source / source_sha256 / generator）を付ける
     front_matter: bool = False
