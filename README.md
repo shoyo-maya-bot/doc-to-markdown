@@ -95,6 +95,8 @@ figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io 
 1. **構造**: 変換時に認識した見出し・箇条書き・表・行・画像の数と、出力の数を比べる（整形で落ちたものを検知）
 2. **本文量**: 元ファイルから **アダプタとは別の経路** で直接数えた文字数（Word/PowerPoint は XML の全テキスト、
    Excel は全セル、PDF は全文字）と、出力の文字数を比べる（未対応の要素で落ちたものを検知 → `loss.raw_text`）
+   PDF で除いたヘッダー・フッター・ページ番号の文字も元の文字数に含めたまま比べるので、ページが少なく除く割合が大きい PDF では
+   `loss.raw_text` が出ることがあります（除いた文字数は `convert.note` に出ます。`--keep-running-headers` で除かずに見比べられます）
 
 どちらも warning として報告し、`--strict` で終了コード 1 にできます。
 

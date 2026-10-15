@@ -37,7 +37,9 @@ GOLDEN_CASES = [
     ("expense-ledger.xlsx", {}, "expense-ledger"),
     ("expense-ledger.xlsx", {"skip_hidden": True}, "expense-ledger.skip-hidden"),
     ("uncalculated.xlsx", {}, "uncalculated"),
-    ("two-column.pdf", {}, "two-column"),
+    # ヘッダー・フッターを除いた文字数はロス検知から引かない（第 6 回）.
+    # 2 ページの小さな見本で除く分が約 9% あるので、しきい値を下げる
+    ("two-column.pdf", {"loss_threshold": 85}, "two-column"),
 ]
 
 
