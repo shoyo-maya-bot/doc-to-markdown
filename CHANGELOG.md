@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Changed（破壊的変更）
+
+- **Python 3.10 のサポートをやめ、3.11 以上が必要になった**（`requires-python = ">=3.11"`）。
+  Pillow 12.3.0 の脆弱性（2026-10-21 公開、CRITICAL を含む 8 件）の修正版 13.0.0 が Python 3.11 以上でしか入らないため。
+  3.10 の環境では `pip install` が失敗する（`setup.cmd`・`setup.sh` も 3.11 未満で止まる）ので、Python 3.11 以上で `.venv` を作り直す。
+  CI の Linux のテストは 3.11 と 3.12、constraints.txt の基準も 3.11 にした
+
+### Security
+
+- pillow を 12.3.0 から 13.0.0 に上げる（constraints.txt）
+
 ### Changed（第 6 回）
 
 - devtools-common の固定を `04f3915` に更新（設定ファイルの構文エラーや予期しないエラーの標準エラー出力に伏せ字を通す等）

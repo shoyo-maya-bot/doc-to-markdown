@@ -1,7 +1,7 @@
 # 依存の版を固定する constraints.txt を作る（この環境では PyPI に届かないことがあるので、GitHub Actions に作らせる）.
 #
 # - main 以外のブランチで pyproject.toml（またはこのファイル）を変えて push したとき、または手で動かしたときに走る
-# - pyproject.toml（dev を含む）から、uv（版を固定）で Windows・Linux、Python 3.10〜3.12 のどれにも効く constraints.txt を作る
+# - pyproject.toml（dev を含む）から、uv（版を固定）で Windows・Linux、Python 3.11〜3.12 のどれにも効く constraints.txt を作る
 # - git の URL で入れる依存（devtools-common）は constraints に書けない（pip が受け付けない）ので除く. その版は pyproject.toml の SHA で固定済み
 # - 変わっていれば同じブランチにコミットして push する. GITHUB_TOKEN のコミットでは CI が走らないので、次の変更を push して CI を回す
 name: deps-lock
@@ -40,7 +40,7 @@ jobs:
       - name: constraints.txt を作る
         run: |
           uv pip compile pyproject.toml --extra dev \
-            --universal --python-version 3.10 --no-emit-package devtools-common \
+            --universal --python-version 3.11 --no-emit-package devtools-common \
             --no-header --no-annotate -o constraints.txt
           sed -i '1i # 自動生成（.github/workflows/deps-lock.yml）. 手で書き換えない. pip install -c constraints.txt で使う' constraints.txt
           cat constraints.txt

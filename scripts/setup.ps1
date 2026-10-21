@@ -7,18 +7,18 @@ $ErrorActionPreference = "Stop"
 $Repo = Split-Path $PSScriptRoot -Parent
 Set-Location $Repo
 
-# 1. Python 3.10 以上を探す
+# 1. Python 3.11 以上を探す
 $py = $null; $pyArgs = @()
 foreach ($c in @("py", "python", "python3")) {
     if (Get-Command $c -ErrorAction SilentlyContinue) { $py = $c; if ($c -eq "py") { $pyArgs = @("-3") }; break }
 }
 if (-not $py) {
-    Write-Host "Python が見つかりません。Python 3.10 以上をインストールしてください: https://www.python.org/downloads/" -ForegroundColor Red
+    Write-Host "Python が見つかりません。Python 3.11 以上をインストールしてください: https://www.python.org/downloads/" -ForegroundColor Red
     Write-Host "（インストーラーで「Add python.exe to PATH」にチェック）"
     exit 1
 }
-& $py @pyArgs -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
-if ($LASTEXITCODE -ne 0) { Write-Host "Python 3.10 以上が必要です" -ForegroundColor Red; exit 1 }
+& $py @pyArgs -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"
+if ($LASTEXITCODE -ne 0) { Write-Host "Python 3.11 以上が必要です" -ForegroundColor Red; exit 1 }
 
 # 2. 仮想環境
 if (-not (Test-Path ".venv\Scripts\python.exe")) {

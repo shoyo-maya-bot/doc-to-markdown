@@ -7,6 +7,8 @@
 
 ## すぐ使う（3 ステップ）
 
+Python 3.11 以上が必要です（2026-10-22 から。3.10 は Pillow 13 が入らないため対象外にしました → [CHANGELOG](CHANGELOG.md)）。
+
 1. このリポジトリを clone する（`devtools-common` も同じフォルダに clone しておくと GitHub の認証が不要）
 2. **Windows**: `setup.cmd` をダブルクリック ／ **macOS・Linux**: `./setup.sh`
 3. VS Code でこのフォルダを開き、Copilot Chat で **`/doc2md-convert`** と入力 → ファイルのパスを指定

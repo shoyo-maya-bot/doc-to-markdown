@@ -17,6 +17,8 @@ jobs:
     with:
       # --via-pdf / --recalc / OCR のテスト用（無ければ該当テストは skip される）
       extra-apt-packages: "libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr"
+      # 対応する最も古い版（requires-python）と 3.12. Pillow 13 が 3.11 以上のため 3.10 はやめた
+      python-versions: '["3.11", "3.12"]'
     secrets:
       DEPS_TOKEN: ${{ secrets.DEPS_TOKEN }}  # 必要なものだけを名前で渡す（secrets: inherit は使わない）
 
