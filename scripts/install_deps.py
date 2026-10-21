@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -28,19 +29,10 @@ def pip(*args: str) -> None:
 
 def dependencies(extras: list[str]) -> list[str]:
     text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-    try:
-        import tomllib
-
-        project = tomllib.loads(text)["project"]
-        deps = list(project.get("dependencies", []))
-        for e in extras:
-            deps += project.get("optional-dependencies", {}).get(e, [])
-    except ModuleNotFoundError:  # Python 3.10
-        m = re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.S | re.M)
-        deps = re.findall(r'"([^"]+)"', m.group(1)) if m else []
-        for e in extras:
-            m = re.search(rf"^{e}\s*=\s*\[(.*?)\]", text, re.S | re.M)
-            deps += re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    project = tomllib.loads(text)["project"]
+    deps = list(project.get("dependencies", []))
+    for e in extras:
+        deps += project.get("optional-dependencies", {}).get(e, [])
     return deps
 
 

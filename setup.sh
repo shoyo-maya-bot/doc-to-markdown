@@ -10,8 +10,8 @@ PY=""
 for c in python3 python; do
   if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
 done
-if [ -z "$PY" ] || ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
-  echo "Python 3.10 以上が必要です: https://www.python.org/downloads/" >&2
+if [ -z "$PY" ] || ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+  echo "Python 3.11 以上が必要です: https://www.python.org/downloads/" >&2
   exit 1
 fi
 
