@@ -15,6 +15,27 @@
 
 - pillow を 12.3.0 から 13.0.0 に上げる（constraints.txt）
 
+### Fixed（第 7 回）
+
+- Excel・PowerPoint・PDF・draw.io の文字（素の文字）で、行の途中の `*` `_` `` ` `` `[` `]` `~` をエスケープしていなかった
+  （`2*3*4` が斜体に、`[x](javascript:…)` がリンクになった）。前に `\` を付ける（表示される文字は同じ。Word は従来どおり）。
+  **Markdown のソースが変わります**（例: `a_b` → `a\_b`）。fieldcheck の表の読み取りは `\` を外して元の文字に戻す
+- ロス検知で、エスケープした `\[x\](…)` をリンクとみなして文字を落とし、`loss.text` / `loss.raw_text` を誤って出していた
+- `-r` で別フォルダに同じ名前のファイルがあると、レポートの `location` がファイル名だけで区別できなかった。
+  重なるときだけフォルダ付き（`a/spec.docx`）にする（重ならない名前は従来どおり。`--dry-run` も同じ）
+- `--max-cells` / `--max-unzipped-mb` / `--max-zip-ratio` に 0 以下を渡せた（0 ですべての Office 文書が上限超えになる等）。
+  1 以上でなければ引数の誤り（終了コード 2）にする
+
+### Changed（第 7 回: ドキュメントを実装に合わせる）
+
+- 版を `0.5.0.dev0` にした（Unreleased に破壊的変更（3.11 以上）があるのに、リリース済みの `0.4.1` を名乗っていた）
+- OUTPUT_SPEC.md: `convert.llms_txt` が rule_id の一覧に無かった。終了コード 2 と `convert.input_error` に壊れたファイルを書いた。
+  素の文字のインライン記法のエスケープと、重なる名前の `location` を書いた
+- WORKFLOW.md・copilot-instructions.md: Tesseract が無いと終了コード 2 になると書いていた（実際は止まらず `convert.warning`）
+- README の上限の表に「1 以上」を書いた
+- `tests/test_docs_match_code.py`: Python の版（pyproject・README・setup・CI・ruff）、版と CHANGELOG、README の上限の既定値と
+  `--help` の既定値、OUTPUT_SPEC の rule_id とコード、終了コードの一致を確かめる
+
 ### Changed（第 6 回）
 
 - devtools-common の固定を `04f3915` に更新（設定ファイルの構文エラーや予期しないエラーの標準エラー出力に伏せ字を通す等）
