@@ -77,12 +77,15 @@ def _restore_escaped(text: str) -> str:
 
 
 def plain_text(md: str) -> str:
-    body = _COMMENT.sub("", md)
+    # エスケープした記号（`\[` `\*` 等）を先に退避してから記法を外す.
+    # 後にすると、本文の `\[x\](…)` をリンクとみなして文字を落とし、ロスと誤検知する
+    body = _ESCAPED.sub(_keep_escaped, md)
+    body = _COMMENT.sub("", body)
     body = _IMAGE.sub("", body)
     body = _LINK.sub(r"\1", body)
     body = _FOOTNOTE.sub("", body)
     body = _QUOTE_LABEL.sub("", body)
-    body = _restore_escaped(_MARKUP.sub("", _ESCAPED.sub(_keep_escaped, body)))
+    body = _restore_escaped(_MARKUP.sub("", body))
     return body.replace("\\\n", "\n")
 
 

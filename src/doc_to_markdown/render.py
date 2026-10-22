@@ -68,11 +68,14 @@ def link_destination(dest: str, *, path: bool = True) -> str:
 def escape_inline(text: str, *, markup: bool = False) -> str:
     """文字列の中の Markdown・HTML として解釈される文字をエスケープする.
 
+    markup=False（素の文字列。Excel のセル・PowerPoint・PDF・draw.io の文字）: `\\` `|` と、行の途中でも
+    強調・コード・リンク・打ち消しになる記号（`` ` `` `*` `_` `[` `]` `~`）の前に `\\` を付ける
+    （`2*3*4` が斜体に、`[x](javascript:…)` がリンクにならないように）。
     markup=True は変換側が意図して書いた記法（太字・リンク・脚注）を含む文字列: `\\` と `|` は触らない。
     その中の素の文字列は、作る側（アダプタ）が escape_markdown でエスケープしておく。
     """
     if not markup:
-        text = text.replace("\\", "\\\\").replace("|", "\\|")
+        text = escape_markdown(text).replace("|", "\\|")
     return _ENTITY.sub("\\\\&", _HTML.sub("\\\\<", text))
 
 

@@ -46,7 +46,7 @@ doc2md 設計書/ -d out/ -r --front-matter -f json -o out/report.json
 | `convert.warning` / `convert.note` | 変更履歴・非表示の行・数式の未計算・OCR など、読み方に注意が要る | 内容を読み、必要なら `--track-changes`、`--skip-hidden`、`--recalc` を付けて変換し直す |
 | 警告なし（`loss.*` が出ない） | 文字数が元の 95%（`--loss-threshold`）以上ある。**内容が正しいことまでは保証しない** | 3 の突合は省かない。数値表中心なら `--loss-threshold 99` で厳しくする |
 | 終了コード 1 | 変換に失敗したファイルがある（`--strict` なら警告も） | `report.json` の `findings` で失敗したファイルと理由を見る |
-| 終了コード 2 | 引数・入力の誤り、必要な外部ソフト（LibreOffice・Tesseract）が無い | `doc2md --check-env` で確かめる。データではなく前提の問題 |
+| 終了コード 2 | 引数・入力の誤り（壊れたファイルを含む）、必要な外部ソフト（LibreOffice）が無い | `doc2md --check-env` で確かめる。データではなく前提の問題。Tesseract が無いときは止まらず、スキャンページを `convert.warning` で知らせる |
 | 終了コード 3 | 実行時エラー | ログ（標準エラー）を添えて相談する |
 
 ### 3. 人が突合する
