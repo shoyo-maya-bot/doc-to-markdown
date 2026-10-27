@@ -10,7 +10,8 @@
   doc2md docs/ --dry-run                             # 変換せず、各ファイルをどう処理するかだけ表示
 
 標準出力には変換レポート（ロス検知・注意事項）を出す。Markdown はファイルに書き出す。
-終了コード: 0 成功 / 1 失敗あり（--strict 時は警告ありも）/ 2 引数・入力の誤り / 3 実行時エラー
+終了コード: 0 成功 / 1 失敗あり（--strict 時は警告ありも。--dry-run は必要な外部ソフトが無い plan.missing_tool）/
+  2 引数・入力の誤り（壊れたファイル、LibreOffice が変換できない .doc 等を含む）/ 3 実行時エラー
 外部ツールの場所: DEVTOOLS_SOFFICE / DEVTOOLS_DRAWIO / DEVTOOLS_TESSERACT（PATH に無い場合）
 """
 
@@ -112,7 +113,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--front-matter",
         action="store_true",
-        help="Markdown の先頭に title / id / source / source_sha256 を付ける（id は前回の出力から引き継ぐ）",
+        help="Markdown の先頭に title / id / source / source_sha256 / generator を付ける"
+        "（id は前回の出力から引き継ぐ）",
     )
     a.add_argument(
         "--llms-txt",

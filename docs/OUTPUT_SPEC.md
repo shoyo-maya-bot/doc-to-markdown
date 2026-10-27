@@ -184,7 +184,7 @@ Front Matter は変換ロス検知の集計に含めない。
 | `convert.hidden_unknown` | warning | 省メモリ読み込みのシートで非表示の行・列を判定できず、すべて出力した | `--max-cells` を上げて通常の読み込みで再変換 |
 | `loss.raw_text` | warning | **元ファイルから直接数えた** 文字の 95%（`--loss-threshold`）未満しか出力されていない（未対応の要素がある） | 図形・グラフ等を確認。`--via-pdf` と比較 |
 | `convert.failed` | error | 変換に失敗（`--continue-on-error` 時のみ。それ以外は終了コード 3） | ファイルが壊れていないか確認 |
-| `convert.input_error` | error | そのファイルだけの入力の誤り（壊れたファイル・途中で切れたファイル・拡張子と中身が違うファイル、zip の展開サイズ・圧縮率の上限超え、LibreOffice が無いのに .doc 等を指定、draw.io の圧縮された図の展開サイズの上限超え）。`--continue-on-error` 時のみ（最後に終了コード 1）。それ以外は終了コード 2 で即終了 | 入力ファイル・外部ツールを確認 |
+| `convert.input_error` | error | そのファイルだけの入力の誤り（壊れたファイル・途中で切れたファイル・拡張子と中身が違うファイル、LibreOffice が変換できなかったファイル、zip の展開サイズ・圧縮率の上限超え、LibreOffice が無いのに .doc 等を指定、draw.io の圧縮された図の展開サイズの上限超え）。`--continue-on-error` 時のみ（最後に終了コード 1）。それ以外は終了コード 2 で即終了 | 入力ファイル・外部ツールを確認 |
 
 `location` は元ファイル名です。別フォルダに同じ名前の入力があるとき（`-r` の `a/spec.docx` と `b/spec.docx`）は、
 出力名と同じくフォルダ構成を残した `a/spec.docx` / `b/spec.docx` にします（どのファイルの指摘か区別できるように）。
@@ -195,9 +195,9 @@ Front Matter は変換ロス検知の集計に含めない。
 | コード | 条件 |
 |---|---|
 | 0 | すべて変換できた（warning があっても 0。`--strict` なら 1） |
-| 1 | `convert.failed` または `convert.input_error` がある（`--continue-on-error` での一部失敗）、または `--strict` で warning がある |
-| 2 | 未対応の形式、入力が無い、オプションの誤り（`--max-*` に 0 以下を指定した 等）、壊れたファイル・途中で切れたファイル・拡張子と中身が違うファイル、必要な外部ツール（LibreOffice 等）が無い、zip の展開サイズ・圧縮率が上限超え（`--continue-on-error` なしのとき）。`--continue-on-error` では、ファイル単位の入力の誤り（`convert.input_error`）は他のファイルの変換を続け、レポートと llms.txt を出してから 1 で終わる。引数の誤り・未対応の形式の直接指定は `--continue-on-error` でも即 2 |
-| 3 | 想定外のエラー |
+| 1 | `convert.failed` または `convert.input_error` がある（`--continue-on-error` での一部失敗）、または `--strict` で warning がある。`--dry-run` では `plan.missing_tool`（error）がある |
+| 2 | 未対応の形式、入力が無い、オプションの誤り（`--max-*` に 0 以下を指定した 等）、壊れたファイル・途中で切れたファイル・拡張子と中身が違うファイル、LibreOffice が変換できなかったファイル（`.doc` 等・`--via-pdf`・`--recalc`。LibreOffice の異常終了・出力なし）、必要な外部ツール（LibreOffice 等）が無い、zip の展開サイズ・圧縮率が上限超え（`--continue-on-error` なしのとき）。`--continue-on-error` では、ファイル単位の入力の誤り（`convert.input_error`）は他のファイルの変換を続け、レポートと llms.txt を出してから 1 で終わる。引数の誤り・未対応の形式の直接指定は `--continue-on-error` でも即 2 |
+| 3 | 想定外のエラー（LibreOffice の変換の時間切れ（600 秒）を含む） |
 
 ### dry-run（`--dry-run`）
 
