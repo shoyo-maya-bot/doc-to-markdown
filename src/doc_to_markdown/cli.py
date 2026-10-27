@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -55,6 +56,26 @@ def _loss_threshold(value: str) -> float:
     if not 0 < v <= 100:  # nan もここで弾く
         raise argparse.ArgumentTypeError(f"0 より大きく 100 以下で指定してください: {value}")
     return v
+
+
+def _positive_int(value: str) -> int:
+    """--max-cells / --max-unzipped-mb / --max-zip-ratio: 1 以上の整数（0・負の数は引数の誤り = 終了コード 2）."""
+    try:
+        v = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"整数で指定してください: {value}") from None
+    if v < 1:
+        raise argparse.ArgumentTypeError(f"1 以上で指定してください: {value}")
+    return v
+
+
+def locations(files: list[Path], names: dict[Path, tuple[Path, str]]) -> dict[Path, str]:
+    """レポートの location に使う、入力ごとに重ならない名前.
+
+    ファイル名が他の入力と重ならなければファイル名のまま（今までどおり）。別フォルダの同じ名前
+    （`-r` の `a/spec.docx` と `b/spec.docx`）は、出力名と同じくフォルダ構成を残す（`a/spec.docx`）。
+    """
+    return {f: (names[f][0] / f.name).as_posix() for f in files}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,21 +147,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     x.add_argument(
         "--max-cells",
-        type=int,
+        type=_positive_int,
         default=200_000,
-        help="これを超えるセル数のブックは省メモリ読み込み（結合・複数表の判定なし。既定 200000）",
+        help="これを超えるセル数のブックは省メモリ読み込み（結合・複数表の判定なし。1 以上。既定 200000）",
     )
     g.add_argument(
         "--max-unzipped-mb",
-        type=int,
+        type=_positive_int,
         default=1024,
-        help="Office 形式（zip）の展開後の合計サイズの上限 MB。超えたら変換しない（終了コード 2。既定 1024）",
+        help="Office 形式（zip）の展開後の合計サイズの上限 MB。超えたら変換しない（終了コード 2。1 以上。既定 1024）",
     )
     g.add_argument(
         "--max-zip-ratio",
-        type=int,
+        type=_positive_int,
         default=500,
-        help="Office 形式の中の 1MB 以上のファイルの圧縮率の上限。超えたら変換しない（終了コード 2。既定 500）",
+        help="Office 形式の中の 1MB 以上のファイルの圧縮率の上限。超えたら変換しない（終了コード 2。1 以上。既定 500）",
     )
 
     d = p.add_argument_group("PDF")
@@ -182,10 +203,12 @@ def plan(files: list[Path], opts: Options) -> list[Finding]:
 
     have_soffice = find_executable(SOFFICE) is not None
     out: list[Finding] = []
+    where = locations(files, output_names(files))
     for f in files:
+        loc = where[f]
         suffix = f.suffix.lower()
         if suffix not in SUPPORTED:
-            out.append(Finding("plan.unsupported", Severity.WARNING, "未対応の形式のため変換しません", location=f.name))
+            out.append(Finding("plan.unsupported", Severity.WARNING, "未対応の形式のため変換しません", location=loc))
             continue
         via_pdf = suffix in VIA_PDF_ONLY or (opts.via_pdf and suffix in OFFICE)
         route = f"{suffix} → PDF 経由（LibreOffice）" if via_pdf else f"{suffix} を直接読み取り"
@@ -195,12 +218,12 @@ def plan(files: list[Path], opts: Options) -> list[Finding]:
                     "plan.missing_tool",
                     Severity.ERROR,
                     f"{route}: LibreOffice が見つかりません",
-                    location=f.name,
+                    location=loc,
                     suggestion="LibreOffice を入れるか DEVTOOLS_SOFFICE で場所を指定（doc2md --check-env）",
                 )
             )
         else:
-            out.append(Finding("plan.route", Severity.INFO, route, location=f.name))
+            out.append(Finding("plan.route", Severity.INFO, route, location=loc))
     return out
 
 
@@ -274,8 +297,10 @@ def main(argv: list[str] | None = None) -> int:
     converted = []
     input_errors = 0  # --continue-on-error で続けた、ファイル単位の入力の誤り（UsageError）の数
     names = output_names(files)
+    where = locations(files, names)
     for f in files:
         sub, name = names[f]
+        loc = where[f]
         if (sub, name) != (Path(), f.stem):  # 同じ出力名の入力があるので名前を変える（黙って上書きしない）
             dest = (sub / f"{name}.md").as_posix()
             print(f"doc2md: 出力名が他の入力と重なるため {f.as_posix()} → {dest} に書き出します", file=sys.stderr)
@@ -284,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
                     "convert.renamed",
                     Severity.INFO,
                     f"出力名が他の入力と重なるため {dest} に書き出します",
-                    location=f.name,
+                    location=loc,
                 )
             )
         try:
@@ -296,13 +321,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise
             input_errors += 1
             findings.append(
-                Finding("convert.input_error", Severity.ERROR, str(e), location=f.name, suggestion="入力ファイルを確認")
+                Finding("convert.input_error", Severity.ERROR, str(e), location=loc, suggestion="入力ファイルを確認")
             )
             continue
         except Exception as e:  # noqa: BLE001
             if not args.continue_on_error:
                 raise
-            findings.append(Finding("convert.failed", Severity.ERROR, f"{type(e).__name__}: {e}", location=f.name))
+            findings.append(Finding("convert.failed", Severity.ERROR, f"{type(e).__name__}: {e}", location=loc))
             continue
         converted.append(r)
         findings.append(
@@ -310,13 +335,14 @@ def main(argv: list[str] | None = None) -> int:
                 "convert.ok",
                 Severity.INFO,
                 f"→ {r.output.as_posix()}",
-                location=f.name,
+                location=loc,
                 actual=f"headings={r.stats.headings} lists={r.stats.list_items} tables={r.stats.tables} "
                 f"rows={r.stats.table_rows} images={r.stats.images} chars={r.stats.text_chars}"
                 + (" via-pdf" if r.via_pdf else ""),
             )
         )
-        findings.extend(r.findings)
+        # 変換側の指摘はファイル名で書かれている. 重なる名前の入力は区別できるようにフォルダ付きにする
+        findings.extend(dataclasses.replace(x, location=loc) if x.location == f.name else x for x in r.findings)
 
     # --continue-on-error で失敗したファイルがあっても、変換できた分の索引は必ず作る（0 件なら空の索引）
     if args.llms_txt:
