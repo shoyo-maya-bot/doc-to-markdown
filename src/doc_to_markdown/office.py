@@ -9,6 +9,12 @@ from devtools_common.cli import UsageError
 from devtools_common.executables import SOFFICE, find_executable, not_found_message
 
 
+class LibreOfficeInputError(RuntimeError):
+    """LibreOffice が入力を変換できなかった（異常終了・出力なし）. 壊れたファイル・形式違いが主な原因なので、
+    converter.is_broken_input が入力の誤り（終了コード 2）として扱う. 時間切れは RuntimeError のまま（終了コード 3）.
+    """
+
+
 def find_soffice() -> str | None:
     return find_executable(SOFFICE)
 
@@ -42,11 +48,11 @@ def libreoffice_convert(src: Path, workdir: Path, target: str) -> Path:
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"LibreOffice の変換がタイムアウトしました: {src.name}") from e
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"LibreOffice の変換に失敗しました: {src.name} (exit {e.returncode})") from e
+        raise LibreOfficeInputError(f"LibreOffice の変換に失敗しました: {src.name} (exit {e.returncode})") from e
     ext = target.split(":", 1)[0]
     out = out_dir / f"{src.stem}.{ext}"
     if not out.is_file():
-        raise RuntimeError(f"LibreOffice が {ext} を出力しませんでした: {src.name}")
+        raise LibreOfficeInputError(f"LibreOffice が {ext} を出力しませんでした: {src.name}")
     return out
 
 

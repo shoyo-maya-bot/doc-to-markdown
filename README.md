@@ -114,10 +114,12 @@ figspec build samples/figspec/approval-flow.yaml --svg      # .drawio（draw.io 
 
 ### 終了コード
 
-`0` 成功 ／ `1` 変換失敗あり（`--continue-on-error` での一部失敗を含む。`--strict` なら警告ありも）／
-`2` 引数・入力の誤り（壊れたファイル・途中で切れたファイル・拡張子と中身が違うファイルを含む）、必要な外部ソフトが無い、
+`0` 成功 ／ `1` 変換失敗あり（`--continue-on-error` での一部失敗を含む。`--strict` なら警告ありも。
+`--dry-run` では必要な外部ソフトが無いファイル（`plan.missing_tool`）がある）／
+`2` 引数・入力の誤り（壊れたファイル・途中で切れたファイル・拡張子と中身が違うファイル、LibreOffice が変換できなかった
+`.doc`・`.xls`・`.ppt` 等（`--via-pdf`・`--recalc` を含む）を含む）、必要な外部ソフトが無い、
 zip の展開サイズ・圧縮率（draw.io の圧縮された図は全ページの合計）が上限超え（`--continue-on-error` なしのとき）／
-`3` 実行時エラー
+`3` 実行時エラー（LibreOffice の変換の時間切れ（600 秒）を含む）
 
 `--continue-on-error` では、ファイル単位の入力の誤り（壊れたファイル・上限超え・LibreOffice が無い .doc 等）もそのファイルの失敗
 （`convert.input_error`）として記録して残りを変換し、レポートと llms.txt を出してから終了コード 1（一部失敗）で終わります

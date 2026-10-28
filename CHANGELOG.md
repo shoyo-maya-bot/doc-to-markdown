@@ -15,6 +15,16 @@
 
 - pillow を 12.3.0 から 13.0.0 に上げる（constraints.txt）
 
+### Fixed（第 8 回）
+
+- 壊れた `.doc`・`.xls`・`.ppt` など LibreOffice 経由の変換（`--via-pdf`・`--recalc` を含む）で LibreOffice が異常終了・
+  何も出力しなかったとき、終了コード 3 になっていた（README・OUTPUT_SPEC は壊れたファイルは 2）。入力の誤り（終了コード 2、
+  `--continue-on-error` では `convert.input_error`）にする。LibreOffice の時間切れは従来どおり 3
+- `--front-matter` の `--help` に `generator` が無かった（README・OUTPUT_SPEC・出力にはある）
+- README の終了コードに、`--dry-run` で必要な外部ソフトが無いとき（`plan.missing_tool`）の 1 が無かった
+- 既定の `--ocr-lang jpn+eng` を CI で試していなかった（`tesseract-ocr-jpn` が無く、`eng` だけで試していた）。
+  CI に日本語データを入れ、既定の言語で OCR するテストを足した（CI では日本語データが無ければ失敗にする）
+
 ### Fixed（第 7 回）
 
 - Excel・PowerPoint・PDF・draw.io の文字（素の文字）で、行の途中の `*` `_` `` ` `` `[` `]` `~` をエスケープしていなかった

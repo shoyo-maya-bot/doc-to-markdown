@@ -15,8 +15,9 @@ jobs:
     # devtools-workspace の共通 CI（SHA 固定）. lint・Linux/Windows のテスト・セキュリティ検査をまとめて流す
     uses: shoyo-maya-bot/devtools-workspace/.github/workflows/python-ci.yml@4f21d326c527d6de1e6d34527b77e912e217115a
     with:
-      # --via-pdf / --recalc / OCR のテスト用（無ければ該当テストは skip される）
-      extra-apt-packages: "libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr"
+      # --via-pdf / --recalc / OCR のテスト用（無ければ該当テストは skip される）.
+      # tesseract-ocr-jpn は既定の --ocr-lang jpn+eng を試すため（数 MB。CI では無ければテストが失敗する）
+      extra-apt-packages: "libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr tesseract-ocr-jpn"
       # 対応する最も古い版（requires-python）と 3.12. Pillow 13 が 3.11 以上のため 3.10 はやめた
       python-versions: '["3.11", "3.12"]'
     secrets:
@@ -35,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr
+            libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-cjk tesseract-ocr tesseract-ocr-jpn
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"

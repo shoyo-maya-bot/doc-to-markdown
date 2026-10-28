@@ -26,7 +26,7 @@ from .adapters import ADAPTERS, OFFICE, SUPPORTED, VIA_PDF_ONLY, pdf_adapter
 from .assets import AssetWriter
 from .model import Document, Heading, ListItem, Options, SourceStats, StreamTable, count_chars
 from .normalize import normalize
-from .office import find_soffice, libreoffice_convert, office_to_pdf
+from .office import LibreOfficeInputError, find_soffice, libreoffice_convert, office_to_pdf
 from .render import iter_chunks, iter_stream_table
 
 log = get_logger(__name__)
@@ -250,6 +250,7 @@ def _broken_input_types() -> tuple[type[BaseException], ...]:
         openpyxl.utils.exceptions.InvalidFileException,
         pdfminer.psexceptions.PSException,
         pdfplumber.utils.exceptions.PdfminerException,
+        LibreOfficeInputError,  # .doc・.xls・.ppt・--via-pdf・--recalc で LibreOffice が変換できなかった
     )
 
 
@@ -257,6 +258,8 @@ def is_broken_input(e: BaseException) -> bool:
     """e が入力ファイルの壊れ・形式違いによる例外か（引数・入力の誤り＝終了コード 2 として扱う）.
 
     zip の中に必要な部品が無い（拡張子だけ .docx の別の zip 等）ときの zipfile の KeyError も含める。
+    LibreOffice 経由（.doc 等・--via-pdf・--recalc）で変換できなかったとき（LibreOfficeInputError）も含める
+    （時間切れは含めない＝終了コード 3）。
     """
     if isinstance(e, KeyError) and "archive" in str(e):
         return True
